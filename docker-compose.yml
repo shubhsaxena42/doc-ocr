@@ -1,0 +1,65 @@
+version: '3.8'
+
+services:
+  idai-pipeline:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: idai-pipeline:latest
+    container_name: idai-pipeline
+
+    # Mount volumes for data
+    volumes:
+      - ./data:/app/data
+      - ./train:/app/train
+      - ./output:/app/output
+      - ./models:/app/models
+
+    # Environment variables
+    environment:
+      - FLAGS_use_mkldnn=0
+      - FLAGS_enable_pir_executor=0
+      - CUDA_VISIBLE_DEVICES=0
+
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          memory: 8G
+        reservations:
+          memory: 4G
+
+    # Default command
+    command: [ "--input", "/app/train", "--output", "/app/output/results.json", "--mode", "full" ]
+
+  # Annotation service
+  annotator:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: idai-pipeline:latest
+    container_name: idai-annotator
+
+    volumes:
+      - ./data:/app/data
+      - ./train:/app/train
+
+    ports:
+      - "8501:8501"
+
+    entrypoint: [ "streamlit", "run", "tools/annotator.py", "--server.port=8501", "--server.address=0.0.0.0" ]
+
+    profiles:
+      - annotate
+
+# Usage:
+#
+# Run pipeline:
+#   docker-compose up idai-pipeline
+#
+# Run with custom arguments:
+#   docker-compose run idai-pipeline --input /app/train --output /app/output/results.json --mode cpu-lite
+#
+# Run annotator:
+#   docker-compose --profile annotate up annotator
+#   Then open http://localhost:8501
