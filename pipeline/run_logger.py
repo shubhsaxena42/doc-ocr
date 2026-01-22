@@ -3,29 +3,18 @@ import logging
 import os
 from datetime import datetime
 
-# Get the project root directory (parent of pipeline folder)
-_PIPELINE_DIR = os.path.dirname(os.path.abspath(__file__))
-_PROJECT_ROOT = os.path.dirname(_PIPELINE_DIR)
-
 class RunLogger:
     def __init__(self):
         self.logger = None
         self.run_id = None
     
     def start_new_run(self):
-        """Initialize logging for a new batch run. Only creates file once."""
-        if self.logger is not None:
-            # Already initialized, don't create a new file
-            return
-            
         self.run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
-        # Use absolute path for logs directory
-        log_dir = os.path.join(_PROJECT_ROOT, "logs")
+        log_dir = "logs"
         if not os.path.exists(log_dir):
             os.makedirs(log_dir)
             
         log_file = os.path.join(log_dir, f"pipeline_run_{self.run_id}.log")
-        print(f"📝 Log file: {log_file}")
         
         # Configure logging
         self.logger = logging.getLogger(f"Run_{self.run_id}")
@@ -44,15 +33,7 @@ class RunLogger:
             self.logger.handlers.clear()
             
         self.logger.addHandler(fh)
-        self.logger.info(f"=== BATCH RUN STARTED: {self.run_id} ===")
-    
-    def log_document_start(self, doc_id, image_path):
-        """Log the start of processing a new document within the batch."""
-        if self.logger:
-            self.logger.info(f"")
-            self.logger.info(f"{'='*60}")
-            self.logger.info(f"DOCUMENT_START | DocID: {doc_id} | Path: {image_path}")
-            self.logger.info(f"{'='*60}")
+        self.logger.info(f"Started new pipeline run: {self.run_id}")
         
     def log_ocr_extraction(self, field_name, engine, value, confidence):
         if self.logger:

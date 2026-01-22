@@ -4,8 +4,21 @@ OCR Engines Module
 Parallel execution of PaddleOCR and DeepSeek-OCR for ensemble extraction.
 Computes per-field confidence scores: OCR confidence × parser certainty.
 """
+import os
+# These flags from the notebook are critical for Colab stability
+os.environ["FLAGS_use_mkldnn"] = "0"
+os.environ["FLAGS_enable_pir_executor"] = "0"
+os.environ["FLAGS_use_mkl"] = "0"
+os.environ["MKLDNN_DISABLE"] = "1"
+os.environ["FLAGS_enable_pir_api"] = "0"
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
 import time
+import re
+import sys
+import io
+import tempfile
+from pathlib import Path
 from dataclasses import dataclass, field
 from typing import List, Dict, Tuple, Optional, Any
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -90,18 +103,37 @@ class OCREngineOutput:
 
 
 def _get_paddle_ocr():
-    """Lazy load PaddleOCR."""
+    """Lazy load PaddleOCR with fallback logic."""
     global _paddle_ocr
     if _paddle_ocr is None:
         try:
             from paddleocr import PaddleOCR
-            _paddle_ocr = PaddleOCR(
-                use_angle_cls=True,
-                lang='en',  # Will detect multiple languages
-                use_gpu=True,
-                show_log=False,
-                enable_mkldnn=False
-            )
+            import torch
+            
+            # Determine if we should attempt GPU based on system availability
+            has_gpu = torch.cuda.is_available()
+            
+            try:
+                # Use the exact parameters from the working notebook
+                _paddle_ocr = PaddleOCR(
+                    use_angle_cls=True,
+                    use_textline_orientation=True,  # Matches notebook
+                    lang='en',
+                    use_gpu=has_gpu,
+                    show_log=False,
+                    enable_mkldnn=False  # Matches notebook - prevents MKLDNN conflicts
+                )
+            except Exception as e:
+                print(f"GPU initialization failed: {e}. Falling back to CPU.")
+                # Fallback to CPU to prevent the SIGABRT crash
+                _paddle_ocr = PaddleOCR(
+                    use_angle_cls=True,
+                    use_textline_orientation=True,
+                    lang='en',
+                    use_gpu=False,
+                    show_log=False,
+                    enable_mkldnn=False
+                )
         except ImportError:
             print("Warning: PaddleOCR not installed. Install with: pip install paddleocr")
             _paddle_ocr = None
@@ -139,69 +171,128 @@ class DeepSeekOCRWrapper:
         self._initialized = False
         
     def _lazy_init(self):
-        """Lazy initialization of model components."""
+        """Lazy initialization of DeepSeek-OCR 4-bit model."""
         if self._initialized:
             return
             
         try:
-            from transformers import AutoProcessor, AutoModelForVision2Seq
+            from transformers import AutoTokenizer, AutoModel
             import torch
             
-            # Note: Replace with actual DeepSeek-OCR model when available
-            # This is a placeholder using a compatible VLM architecture
-            model_name = "microsoft/trocr-base-handwritten"
+            model_id = 'Jalea96/DeepSeek-OCR-bnb-4bit-NF4'
+            print(f"🔄 Loading DeepSeek-OCR (4-bit): {model_id}...")
             
-            self.processor = AutoProcessor.from_pretrained(model_name)
-            self.model = AutoModelForVision2Seq.from_pretrained(
-                model_name,
-                torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
-                device_map="auto" if torch.cuda.is_available() else None
+            self.tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
+            self.model = AutoModel.from_pretrained(
+                model_id,
+                _attn_implementation='eager',
+                trust_remote_code=True,
+                use_safetensors=True,
+                device_map="auto",
+                torch_dtype=torch.bfloat16
             )
+            self.model = self.model.eval()
+            
             self._initialized = True
         except Exception as e:
-            print(f"DeepSeek-OCR initialization skipped: {e}")
+            print(f"DeepSeek-OCR initialization error: {e}")
             self._initialized = True  # Prevent repeated attempts
     
-    def ocr(self, image_path: str) -> List[Dict]:
+    def ocr(self, image_path: str, mode: str = "gundam") -> List[Dict]:
         """
-        Run OCR on image.
+        Run OCR using DeepSeek-OCR 4-bit.
         
-        Returns list of detections with text, bbox, and confidence.
+        Returns list of detections (currently single full-text detection).
         """
         self._lazy_init()
         
         if self.model is None:
-            # Fallback: return empty results if model not available
             return []
         
         try:
-            from PIL import Image
             import torch
             
-            image = Image.open(image_path).convert("RGB")
+            mode_configs = {
+                "tiny":   {"base_size": 512, "image_size": 512, "crop_mode": False},
+                "small":  {"base_size": 640, "image_size": 640, "crop_mode": False},
+                "base":   {"base_size": 1024, "image_size": 1024, "crop_mode": False},
+                "large":  {"base_size": 1280, "image_size": 1280, "crop_mode": False},
+                "gundam": {"base_size": 1024, "image_size": 640, "crop_mode": True},
+            }
+            config = mode_configs.get(mode, mode_configs["gundam"])
             
-            # For full document OCR, we'd use a text detection model first
-            # then run recognition on each detected region
-            # Here we provide a simplified single-pass approach
+            prompt = "<image>\n<|grounding|>Convert the document to markdown. "
+            temp_dir = os.path.join(tempfile.gettempdir(), "deepseek_ocr_temp")
+            if not os.path.exists(temp_dir):
+                os.makedirs(temp_dir)
             
-            pixel_values = self.processor(image, return_tensors="pt").pixel_values
+            # Capture stdout because infer() prints result
+            old_stdout = sys.stdout
+            sys.stdout = captured = io.StringIO()
             
-            if torch.cuda.is_available():
-                pixel_values = pixel_values.cuda()
+            try:
+                result = self.model.infer(
+                    self.tokenizer,
+                    prompt=prompt,
+                    image_file=image_path,
+                    output_path=temp_dir,
+                    base_size=config["base_size"],
+                    image_size=config["image_size"],
+                    crop_mode=config["crop_mode"],
+                    save_results=False,
+                    test_compress=True
+                )
+            finally:
+                sys.stdout = old_stdout
             
-            generated_ids = self.model.generate(pixel_values, max_length=256)
-            text = self.processor.batch_decode(generated_ids, skip_special_tokens=True)[0]
+            captured_text = captured.getvalue()
+            final_text = ""
             
-            # Return as single detection covering the whole image
-            w, h = image.size
+            # Debug: Print what we captured
+            print(f"[DeepSeek Debug] Captured output length: {len(captured_text)} chars")
+            if captured_text:
+                print(f"[DeepSeek Debug] First 200 chars: {captured_text[:200]}")
+            
+            # Extract text from result or captured stdout
+            if result and isinstance(result, (str, dict)):
+                if isinstance(result, dict) and 'text' in result:
+                    final_text = result['text']
+                    print(f"[DeepSeek Debug] Got text from result dict: {len(final_text)} chars")
+                elif isinstance(result, str) and len(result) > 10:
+                    final_text = result
+                    print(f"[DeepSeek Debug] Got text from result string: {len(final_text)} chars")
+            
+            if not final_text and captured_text:
+                lines = []
+                for line in captured_text.split('\n'):
+                    if 'PATCHES:' in line or 'torch.Size' in line:
+                        continue
+                    line = re.sub(r'<\|ref\|>|<\/ref>|<\|det\|>|<\/det>|<\|grounding\|>', '', line)
+                    line = re.sub(r'\[\[\d+,\s*\d+,\s*\d+,\s*\d+\]\]', '', line)
+                    if line.strip():
+                        lines.append(line.strip())
+                final_text = '\n'.join(lines)
+                print(f"[DeepSeek Debug] Extracted {len(lines)} lines, total {len(final_text)} chars")
+            
+            # Get image size
+            from PIL import Image
+            img = Image.open(image_path)
+            w, h = img.size
+            
+            print(f"[DeepSeek Debug] Final text length: {len(final_text)}")
+            if final_text:
+                print(f"[DeepSeek Debug] Sample: {final_text[:100]}")
+            
             return [{
-                "text": text,
+                "text": final_text,
                 "bbox": [[0, 0], [w, 0], [w, h], [0, h]],
-                "confidence": 0.85  # Estimated confidence
+                "confidence": 0.90 if final_text else 0.0
             }]
             
         except Exception as e:
             print(f"DeepSeek-OCR error: {e}")
+            import traceback
+            traceback.print_exc()
             return []
 
 

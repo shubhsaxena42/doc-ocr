@@ -13,6 +13,14 @@ import numpy as np
 import cv2
 from pathlib import Path
 
+# For downloading trained models from HuggingFace Hub
+try:
+    from huggingface_hub import hf_hub_download
+    HF_HUB_AVAILABLE = True
+except ImportError:
+    HF_HUB_AVAILABLE = False
+    print("Warning: huggingface_hub not installed. Will use fallback YOLO model.")
+
 
 @dataclass
 class Detection:
@@ -281,18 +289,83 @@ class YOLODetector:
 
 
 class SignatureDetector(YOLODetector):
-    """Specialized detector for signatures."""
+    """
+    Specialized detector for signatures.
+    
+    Uses the trained YOLOv8s signature detector from HuggingFace Hub:
+    tech4humans/yolov8s-signature-detector
+    """
+    
+    # HuggingFace Hub model configuration (from working notebook)
+    HF_REPO_ID = "tech4humans/yolov8s-signature-detector"
+    HF_MODEL_FILENAME = "yolov8s.pt"
     
     def __init__(
         self,
-        model_path: str = "models/yolo_signature.onnx",
-        confidence_threshold: float = 0.5
+        model_path: str = None,  # If None, will download from HuggingFace
+        confidence_threshold: float = 0.5,
+        use_hf_model: bool = True  # Whether to use HuggingFace model
     ):
+        """
+        Initialize signature detector.
+        
+        Args:
+            model_path: Path to local model (optional, uses HF model by default)
+            confidence_threshold: Minimum confidence for detections
+            use_hf_model: If True, download model from HuggingFace Hub
+        """
+        self.use_hf_model = use_hf_model
+        
+        # Determine model path
+        if model_path is None and use_hf_model and HF_HUB_AVAILABLE:
+            # Will be downloaded in _lazy_init
+            model_path = "models/yolo_signature.pt"  # Placeholder, actual download happens later
+        elif model_path is None:
+            model_path = "models/yolo_signature.onnx"
+        
         super().__init__(
             model_path=model_path,
             detector_type="signature",
             confidence_threshold=confidence_threshold
         )
+    
+    def _lazy_init(self):
+        """Lazy initialization with HuggingFace Hub model download."""
+        if self._initialized:
+            return
+        
+        try:
+            from ultralytics import YOLO
+            
+            # Try to download from HuggingFace Hub (matching notebook approach)
+            if self.use_hf_model and HF_HUB_AVAILABLE:
+                try:
+                    print(f"🔄 Loading signature detector from HuggingFace Hub...")
+                    model_path = hf_hub_download(
+                        repo_id=self.HF_REPO_ID,
+                        filename=self.HF_MODEL_FILENAME
+                    )
+                    self.model = YOLO(model_path)
+                    print(f"✓ Signature detector loaded from {self.HF_REPO_ID}")
+                    self._initialized = True
+                    return
+                except Exception as e:
+                    print(f"Warning: Failed to download from HuggingFace Hub: {e}")
+                    print("Falling back to local model or pretrained YOLOv8...")
+            
+            # Try local model path
+            if Path(self.model_path).exists():
+                self.model = YOLO(self.model_path)
+                print(f"✓ Signature detector loaded from local: {self.model_path}")
+            else:
+                # Fallback to pretrained YOLOv8
+                self.model = YOLO("yolov8n.pt")
+                print(f"Warning: Using pretrained YOLOv8n. For better results, install huggingface_hub.")
+            
+            self._initialized = True
+        except Exception as e:
+            print(f"YOLO initialization error: {e}")
+            self._initialized = True
 
 
 class StampDetector(YOLODetector):

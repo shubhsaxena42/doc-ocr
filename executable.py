@@ -35,9 +35,6 @@ Examples:
     
     # Process a single image in cpu-lite mode (no VLM)
     python executable.py --input invoice.png --output results.json --mode cpu-lite
-    
-    # Process with calibration from golden set
-    python executable.py --input ./train --output results.json --golden-set data/golden_set.json
         """
     )
     
@@ -60,11 +57,7 @@ Examples:
         help='Pipeline mode: "full" includes Tier 3 VLM, "cpu-lite" skips VLM (default: full)'
     )
     
-    parser.add_argument(
-        '--golden-set', '-g',
-        default=None,
-        help='Path to golden_set.json for calibration'
-    )
+
     
     parser.add_argument(
         '--dealer-list', '-d',
@@ -121,7 +114,7 @@ def main():
     
     processor = create_processor(
         mode=args.mode,
-        golden_set_path=args.golden_set,
+        golden_set_path=None,  # No golden set calibration
         dealer_list_path=args.dealer_list
     )
     
@@ -161,27 +154,13 @@ def main():
     tracker = get_tracker()
     summary = tracker.get_summary()
     
-    # Prepare output
-    output_data = {
-        "metadata": {
-            "timestamp": datetime.now().isoformat(),
-            "mode": args.mode,
-            "input_path": str(input_path),
-            "total_documents": len(results),
-            "processing_time_seconds": (end_time - start_time).total_seconds()
-        },
-        "summary": {
-            "successful": sum(1 for r in results if r.success),
-            "failed": sum(1 for r in results if not r.success),
-            "average_cost_per_document": summary["average_cost_per_document"],
-            "average_latency_per_document": summary["average_latency_per_document"],
-            "vlm_invocation_rate": summary["vlm_invocation_rate"],
-            "within_cost_target": summary["within_cost_target"],
-            "within_latency_target": summary["within_latency_target"],
-            "vlm_rate_acceptable": summary["vlm_rate_acceptable"]
-        },
-        "results": [r.to_dict() for r in results]
-    }
+    # Prepare output - simplified format
+    # For single document, output just the document result
+    # For multiple documents, output a list of results
+    if len(results) == 1:
+        output_data = results[0].to_dict()
+    else:
+        output_data = [r.to_dict() for r in results]
     
     # Save results
     output_path = Path(args.output)
@@ -205,9 +184,14 @@ def main():
     print("\n" + "="*50)
     print("PROCESSING SUMMARY")
     print("="*50)
+    
+    # Calculate success/failure from results
+    successful = sum(1 for r in results if r.success)
+    failed = len(results) - successful
+    
     print(f"Documents processed: {len(results)}")
-    print(f"Successful: {output_data['summary']['successful']}")
-    print(f"Failed: {output_data['summary']['failed']}")
+    print(f"Successful: {successful}")
+    print(f"Failed: {failed}")
     print(f"Average cost/doc: ${summary['average_cost_per_document']:.4f}")
     print(f"Average latency/doc: {summary['average_latency_per_document']:.2f}s")
     print(f"VLM invocation rate: {summary['vlm_invocation_rate']*100:.1f}%")

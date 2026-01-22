@@ -21,6 +21,7 @@ from .field_parser import (
 from .slm_judge import SLMJudge, get_slm_judge, SLMJudgment
 from .vlm_judge import VLMJudge, get_vlm_judge, VLMJudgment
 from .consensus import ConflictResult, ConsensusResult
+from pipeline import run_logger
 
 
 @dataclass
@@ -367,11 +368,16 @@ class AdjudicationLadder:
         total_start = time.time()
         
         # Tier 1: Deterministic rules
+        run_logger.log_adjudication_start(conflict.field_name, "Tier 1 (Rules)")
         result = self.tier1.resolve(conflict, context)
         if result is not None:
+            run_logger.log_adjudication_result(
+                conflict.field_name, "Tier 1", result.resolution_method, result.resolved_value, result.confidence
+            )
             return result
         
         # Tier 2: SLM Judge
+        run_logger.log_adjudication_start(conflict.field_name, "Tier 2 (SLM)")
         slm = self.slm_judge or get_slm_judge()
         slm_result = slm.judge(
             conflict.field_name,
@@ -381,6 +387,9 @@ class AdjudicationLadder:
         )
         
         if slm_result.status == "RESOLVED":
+            run_logger.log_adjudication_result(
+                conflict.field_name, "Tier 2", "slm_judge", slm_result.resolved_value, slm_result.confidence
+            )
             return AdjudicationResult(
                 field_name=conflict.field_name,
                 resolved_value=slm_result.resolved_value,
@@ -394,6 +403,7 @@ class AdjudicationLadder:
         
         # Tier 3: VLM Judge (if enabled and SLM uncertain)
         if self.use_tier3 and slm_result.status == "UNCERTAIN":
+            run_logger.log_adjudication_start(conflict.field_name, "Tier 3 (VLM)")
             if image_path and bbox:
                 vlm = self.vlm_judge or get_vlm_judge()
                 vlm_result = vlm.judge_from_image(
@@ -405,6 +415,9 @@ class AdjudicationLadder:
                 )
                 
                 if vlm_result.status == "RESOLVED":
+                    run_logger.log_adjudication_result(
+                        conflict.field_name, "Tier 3", "vlm_judge", vlm_result.resolved_value, vlm_result.confidence
+                    )
                     return AdjudicationResult(
                         field_name=conflict.field_name,
                         resolved_value=vlm_result.resolved_value,
@@ -420,6 +433,9 @@ class AdjudicationLadder:
         total_latency = time.time() - total_start
         
         if conflict.confidence1 >= conflict.confidence2:
+            run_logger.log_adjudication_result(
+                conflict.field_name, "Fallback", "confidence_check", conflict.value1, conflict.confidence1 * 0.6
+            )
             return AdjudicationResult(
                 field_name=conflict.field_name,
                 resolved_value=conflict.value1,
@@ -431,6 +447,9 @@ class AdjudicationLadder:
                 metadata={"fallback": True}
             )
         else:
+            run_logger.log_adjudication_result(
+                conflict.field_name, "Fallback", "confidence_check", conflict.value2, conflict.confidence2 * 0.6
+            )
             return AdjudicationResult(
                 field_name=conflict.field_name,
                 resolved_value=conflict.value2,

@@ -34,6 +34,7 @@ from .consensus import (
 from .adjudicator import AdjudicationLadder, resolve_conflict, AdjudicationResult
 from .calibration import Calibrator, GoldenSet
 from .cost_tracker import CostTracker, get_tracker
+from pipeline import run_logger
 
 
 @dataclass
@@ -48,6 +49,7 @@ class FieldExtraction:
     metadata: Dict = field(default_factory=dict)
     
     def to_dict(self) -> Dict:
+        """Return full field details."""
         return {
             "field_name": self.field_name,
             "value": self.value,
@@ -57,6 +59,21 @@ class FieldExtraction:
             "bbox": self.bbox,
             "metadata": self.metadata
         }
+    
+    def to_simple_value(self) -> Any:
+        """
+        Return simplified value for output.
+        For visual fields (signature/stamp), returns {present, bbox}.
+        For text/numeric fields, returns just the value.
+        """
+        if self.field_name in ["signature", "stamp"]:
+            if isinstance(self.value, dict):
+                return {
+                    "present": self.value.get("present", False),
+                    "bbox": self.value.get("bbox")
+                }
+            return {"present": False, "bbox": None}
+        return self.value
 
 
 @dataclass
@@ -73,6 +90,33 @@ class ExtractionResult:
     metadata: Dict = field(default_factory=dict)
     
     def to_dict(self) -> Dict:
+        """
+        Return simplified output matching the required format:
+        {
+            "doc_id": "invoice_001",
+            "fields": {
+                "dealer_name": "ABC Tractors Pvt Ltd",
+                "model_name": "Mahindra 575 DI",
+                "horse_power": 50,
+                "asset_cost": 525000,
+                "signature": {"present": true, "bbox": [100, 200, 300, 250]},
+                "stamp": {"present": true, "bbox": [400, 500, 500, 550]}
+            },
+            "confidence": 0.96,
+            "processing_time_sec": 3.8,
+            "cost_estimate_usd": 0.002
+        }
+        """
+        return {
+            "doc_id": self.doc_id,
+            "fields": {k: v.to_simple_value() for k, v in self.fields.items()},
+            "confidence": round(self.document_confidence, 2),
+            "processing_time_sec": round(self.total_latency, 1),
+            "cost_estimate_usd": round(self.total_cost, 4)
+        }
+    
+    def to_detailed_dict(self) -> Dict:
+        """Return full detailed output for debugging/analysis."""
         return {
             "doc_id": self.doc_id,
             "image_path": self.image_path,
@@ -158,6 +202,10 @@ class DocumentProcessor:
         
         # Start cost tracking
         self.tracker.start_document(doc_id, image_path)
+        
+        # Log document start (run_logger should already be initialized)
+        run_logger.start_new_run()  # Idempotent - only creates file on first call
+        run_logger.log_document_start(doc_id, image_path)
         
         try:
             # Step 1: Parallel OCR
@@ -276,6 +324,10 @@ class DocumentProcessor:
                     result.parsed_value,
                     result.confidence
                 )
+                
+                run_logger.log_ocr_extraction(
+                    field_name, engine, result.parsed_value, result.confidence
+                )
         
         # Visual fields from detectors
         for det_type in ["signature", "stamp"]:
@@ -323,6 +375,15 @@ class DocumentProcessor:
                 field_name, engine_results
             )
             
+            # Log consensus check
+            all_values = [str(v[0]) for v in engine_results.values()]
+            run_logger.log_consensus_check(
+                field_name, 
+                conflict.has_conflict if conflict else False, 
+                all_values[0] if len(all_values) > 0 else "None", 
+                all_values[1] if len(all_values) > 1 else "None"
+            )
+            
             # Check if adjudication needed
             if conflict and conflict.has_conflict:
                 # Get bbox for visual adjudication if available
@@ -361,6 +422,11 @@ class DocumentProcessor:
                     confidence=consensus.final_confidence,
                     source=consensus.source
                 )
+                
+            final_res = resolved[field_name]
+            run_logger.log_final_result(
+                field_name, final_res.value, final_res.confidence, final_res.source
+            )
         
         return resolved
     
