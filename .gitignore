@@ -1,1 +1,4 @@
 train/
+logs/
+pipeline_run_20260122_185026.log
+visualizer.py

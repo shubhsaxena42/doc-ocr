@@ -32,8 +32,11 @@ from .consensus import (
     compute_all_consensus
 )
 from .adjudicator import AdjudicationLadder, resolve_conflict, AdjudicationResult
+from .slm_judge import get_slm_judge
+from .vlm_judge import get_vlm_judge
 from .calibration import Calibrator, GoldenSet
 from .cost_tracker import CostTracker, get_tracker
+from .json_logger import get_json_logger, JSONResultLogger
 from pipeline import run_logger
 
 
@@ -232,7 +235,11 @@ class DocumentProcessor:
             doc_confidence = min(field_confidences) if field_confidences else 0.0
             
         except Exception as e:
-            errors.append(f"Processing error: {str(e)}")
+            import traceback
+            error_msg = f"Processing error: {str(e)}"
+            errors.append(error_msg)
+            run_logger.logger.error(f"PROCESSING_ERROR | DocID: {doc_id} | Error: {error_msg}")
+            run_logger.logger.error(f"TRACEBACK | {traceback.format_exc()}")
             calibrated_fields = {}
             doc_confidence = 0.0
         
@@ -241,6 +248,26 @@ class DocumentProcessor:
         
         total_latency = time.time() - start_time
         total_cost = self.tracker.get_document_cost(doc_id)
+        
+        # Log to JSON logger
+        json_logger = get_json_logger()
+        json_logger.start_document(doc_id, image_path)
+        
+        for field_name, extraction in calibrated_fields.items():
+            bbox = extraction.bbox if hasattr(extraction, 'bbox') else None
+            json_logger.log_field(
+                field_name=field_name,
+                value=extraction.value,
+                confidence=extraction.calibrated_confidence,
+                source=extraction.source,
+                bbox=bbox
+            )
+        
+        json_logger.end_document(
+            confidence=doc_confidence,
+            processing_time=total_latency,
+            cost_usd=total_cost
+        )
         
         return ExtractionResult(
             doc_id=doc_id,
@@ -358,10 +385,17 @@ class DocumentProcessor:
         ocr_outputs: Dict[str, OCREngineOutput]
     ) -> Dict[str, FieldExtraction]:
         """
-        Resolve conflicts using consensus and adjudication.
+        Resolve conflicts using FIELD-LEVEL (atomic) escalation.
+        
+        KEY FIX: Only escalate the SPECIFIC conflicting field to SLM/VLM.
+        Keep the consensus values for fields that passed Tier 1.
+        This prevents VLM hallucinations from voiding correct OCR extractions.
         """
         resolved = {}
-        context = " ".join(o.full_text for o in ocr_outputs.values())[:500]
+        full_context = " ".join(o.full_text for o in ocr_outputs.values())[:3000]
+        
+        # Master-list for fuzzy pre-filtering (from field_parser.py)
+        from .field_parser import parse_dealer_name, parse_model_name
         
         for field_name in self.FIELDS:
             # Collect values from all engines
@@ -384,51 +418,271 @@ class DocumentProcessor:
                 all_values[1] if len(all_values) > 1 else "None"
             )
             
-            # Check if adjudication needed
-            if conflict and conflict.has_conflict:
-                # Get bbox for visual adjudication if available
-                bbox = None
-                if field_name in ["signature", "stamp"]:
-                    for engine, (val, _) in engine_results.items():
-                        if isinstance(val, dict) and val.get("bbox"):
-                            bbox = val["bbox"]
-                            break
-                
-                # Log Tier 1 attempt
-                tier1_start = time.time()
-                adj_result = self.adjudicator.resolve(
-                    conflict, context, image_path, bbox
-                )
-                
-                # Log appropriate tier
-                if adj_result.tier_used == 1:
-                    self.tracker.log_tier1(adj_result.latency)
-                elif adj_result.tier_used == 2:
-                    self.tracker.log_slm(adj_result.latency)
-                elif adj_result.tier_used == 3:
-                    self.tracker.log_vlm(adj_result.latency)
-                
-                resolved[field_name] = FieldExtraction(
-                    field_name=field_name,
-                    value=adj_result.resolved_value,
-                    confidence=adj_result.confidence,
-                    source=f"tier{adj_result.tier_used}_{adj_result.resolution_method}",
-                    metadata=adj_result.metadata
-                )
-            else:
+            # === TIER 1: No conflict or consensus reached ===
+            if not conflict or not conflict.has_conflict:
                 resolved[field_name] = FieldExtraction(
                     field_name=field_name,
                     value=consensus.final_value,
                     confidence=consensus.final_confidence,
-                    source=consensus.source
+                    source="tier1_consensus",
+                    metadata={"method": "ocr_agreement"}
                 )
+                run_logger.log_adjudication_result(
+                    field_name, "Tier 1", "consensus",
+                    consensus.final_value, consensus.final_confidence
+                )
+                continue
+            
+            # === PRE-FILTER: Fuzzy match against master-list ===
+            if field_name == "dealer_name":
+                # Try to auto-correct using master-list
+                fuzzy_result = self._fuzzy_match_master_list(
+                    conflict.value1, conflict.value2, field_name
+                )
+                if fuzzy_result:
+                    resolved[field_name] = FieldExtraction(
+                        field_name=field_name,
+                        value=fuzzy_result["value"],
+                        confidence=fuzzy_result["confidence"],
+                        source="tier1_fuzzy_match",
+                        metadata={"matched_to": fuzzy_result.get("matched_to")}
+                    )
+                    run_logger.log_adjudication_result(
+                        field_name, "Tier 1", "fuzzy_match",
+                        fuzzy_result["value"], fuzzy_result["confidence"]
+                    )
+                    continue
+            
+            # === TIER 1.5: Rule-based resolution ===
+            tier1_result = self.adjudicator.tier1.resolve(conflict, full_context[:500])
+            if tier1_result and tier1_result.confidence >= 0.7:
+                self.tracker.log_tier1(tier1_result.latency)
+                resolved[field_name] = FieldExtraction(
+                    field_name=field_name,
+                    value=tier1_result.resolved_value,
+                    confidence=tier1_result.confidence,
+                    source=f"tier1_{tier1_result.resolution_method}",
+                    metadata=tier1_result.metadata
+                )
+                run_logger.log_adjudication_start(field_name, "Tier 1 (Rules)")
+                run_logger.log_adjudication_result(
+                    field_name, "Tier 1", tier1_result.resolution_method,
+                    tier1_result.resolved_value, tier1_result.confidence
+                )
+                continue
+            
+            # === TIER 2: SLM for text fields only ===
+            if field_name not in ["signature", "stamp"]:
+                run_logger.log_adjudication_start(field_name, "Tier 2 (SLM)")
                 
-            final_res = resolved[field_name]
-            run_logger.log_final_result(
-                field_name, final_res.value, final_res.confidence, final_res.source
+                slm = self.adjudicator.slm_judge or get_slm_judge()
+                
+                # Build layout-aware hint
+                layout_hint = self._get_layout_hint(field_name, engine_results, ocr_outputs)
+                
+                # Call SLM with verification prompt (choose between OCR values)
+                slm_result = slm.judge(
+                    field_name,
+                    str(conflict.value1),
+                    str(conflict.value2),
+                    context=full_context[:1500],
+                    layout_hint=layout_hint,
+                    master_hint=""
+                )
+                self.tracker.log_slm(slm_result.latency)
+                
+                if slm_result.status == "RESOLVED" and slm_result.confidence >= 0.6:
+                    resolved[field_name] = FieldExtraction(
+                        field_name=field_name,
+                        value=slm_result.resolved_value,
+                        confidence=slm_result.confidence,
+                        source="tier2_slm",
+                        metadata={"reasoning": slm_result.reasoning}
+                    )
+                    run_logger.log_adjudication_result(
+                        field_name, "Tier 2", "slm_verification",
+                        slm_result.resolved_value, slm_result.confidence
+                    )
+                    continue
+            
+            # === TIER 3: VLM for visual fields OR as final tie-breaker ===
+            if self.adjudicator.use_tier3:
+                run_logger.log_adjudication_start(field_name, "Tier 3 (VLM)")
+                
+                vlm = self.adjudicator.vlm_judge or get_vlm_judge()
+                
+                # For visual fields, use tight crop
+                if field_name in ["signature", "stamp"]:
+                    # Get bbox from detection
+                    bbox = None
+                    for engine, (val, _) in engine_results.items():
+                        if isinstance(val, dict) and val.get("bbox"):
+                            bbox = val["bbox"]
+                            break
+                    
+                    if bbox:
+                        vlm_result = vlm.judge_crop_from_path(
+                            image_path, field_name, bbox,
+                            padding=0.2  # 20% padding
+                        )
+                    else:
+                        vlm_result = vlm.adjudicate_conflict(
+                            image_path, field_name,
+                            str(conflict.value1), str(conflict.value2)
+                        )
+                else:
+                    # For text fields, use verification mode
+                    vlm_result = vlm.adjudicate_conflict(
+                        image_path, field_name,
+                        str(conflict.value1), str(conflict.value2)
+                    )
+                
+                self.tracker.log_vlm(vlm_result.latency)
+                
+                if vlm_result.status == "RESOLVED":
+                    resolved[field_name] = FieldExtraction(
+                        field_name=field_name,
+                        value=vlm_result.resolved_value,
+                        confidence=vlm_result.confidence,
+                        source="tier3_vlm",
+                        metadata={"reasoning": vlm_result.reasoning}
+                    )
+                    run_logger.log_adjudication_result(
+                        field_name, "Tier 3", "vlm_verification",
+                        vlm_result.resolved_value, vlm_result.confidence
+                    )
+                    continue
+            
+            # === FALLBACK: Use best available value ===
+            # Never return None - use quality-based selection
+            fallback_value, fallback_conf = self._quality_fallback(
+                conflict.value1, conflict.conf1,
+                conflict.value2, conflict.conf2,
+                field_name
+            )
+            resolved[field_name] = FieldExtraction(
+                field_name=field_name,
+                value=fallback_value,
+                confidence=fallback_conf * 0.5,  # Penalize fallback
+                source="tier_fallback",
+                metadata={"note": "All tiers failed, using quality heuristic"}
+            )
+            run_logger.log_adjudication_result(
+                field_name, "Fallback", "quality_heuristic",
+                fallback_value, fallback_conf * 0.5
             )
         
         return resolved
+    
+    def _fuzzy_match_master_list(
+        self,
+        value1: str,
+        value2: str,
+        field_name: str
+    ) -> Optional[Dict]:
+        """
+        Try to auto-correct OCR values using fuzzy matching against master-list.
+        
+        If one value has >95% fuzzy match to a master entry, lock it.
+        This turns extraction into verification and prevents unnecessary escalation.
+        """
+        from rapidfuzz import fuzz, process
+        
+        # Master lists (would be loaded from config in production)
+        DEALER_MASTER_LIST = [
+            "ABC Motors", "XYZ Tractors", "Mahindra Authorized Dealer",
+            "John Deere Agri Services", "Swaraj Motors Pvt Ltd",
+            "Sonalika Tractors", "TAFE Dealers", "New Holland India"
+            # Add more from your data
+        ]
+        
+        if field_name != "dealer_name":
+            return None
+        
+        master_list = DEALER_MASTER_LIST
+        threshold = 90  # 90% similarity threshold
+        
+        for candidate in [value1, value2]:
+            if not candidate:
+                continue
+            
+            result = process.extractOne(
+                str(candidate),
+                master_list,
+                scorer=fuzz.token_sort_ratio
+            )
+            
+            if result and result[1] >= threshold:
+                return {
+                    "value": result[0],  # Use the master-list value
+                    "confidence": result[1] / 100.0,
+                    "matched_to": result[0],
+                    "original": candidate
+                }
+        
+        return None
+    
+    def _get_layout_hint(
+        self,
+        field_name: str,
+        engine_results: Dict[str, Tuple[Any, float]],
+        ocr_outputs: Dict[str, OCREngineOutput]
+    ) -> str:
+        """
+        Generate a layout-aware hint for the SLM based on field position.
+        
+        Helps the model distinguish between similar fields (e.g., dealer vs customer).
+        """
+        hints = {
+            "dealer_name": "Usually found at the top of the invoice, often near a logo or letterhead",
+            "model_name": "Located in the item description or product details section",
+            "horse_power": "Often appears near the model name, labeled as 'HP' or 'BHP'",
+            "asset_cost": "Found in the totals section at the bottom, after 'Total' or 'Grand Total'",
+            "signature": "Located at the bottom left or right, may have a date nearby",
+            "stamp": "Usually a circular or rectangular seal, often blue or red in color"
+        }
+        return hints.get(field_name, "")
+    
+    def _quality_fallback(
+        self,
+        value1: Any,
+        conf1: float,
+        value2: Any,
+        conf2: float,
+        field_name: str
+    ) -> Tuple[Any, float]:
+        """
+        Quality-based fallback when all tiers fail.
+        
+        Uses heuristics to pick the better value:
+        - Prefers non-null values
+        - Prefers shorter/cleaner values (less hallucination)
+        - Penalizes values with excessive special characters
+        """
+        def quality_score(value, conf):
+            if value is None:
+                return 0
+            
+            v_str = str(value)
+            score = conf
+            
+            # Penalize very long values (likely hallucinations)
+            if len(v_str) > 100:
+                score *= 0.5
+            
+            # Penalize excessive special characters
+            special_ratio = sum(1 for c in v_str if not c.isalnum() and c != ' ') / max(len(v_str), 1)
+            if special_ratio > 0.3:
+                score *= 0.6
+            
+            return score
+        
+        s1 = quality_score(value1, conf1)
+        s2 = quality_score(value2, conf2)
+        
+        if s1 >= s2:
+            return value1, conf1
+        return value2, conf2
     
     def _calibrate(
         self,

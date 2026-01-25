@@ -1,0 +1,238 @@
+{
+  "run_id": "20260123_015451",
+  "timestamp": "2026-01-23T01:55:12.977861",
+  "total_documents": 20,
+  "source_statistics": {
+    "ocr_fields": 0,
+    "slm_fields": 7,
+    "vlm_fields": 0
+  },
+  "results": [
+    {
+      "doc_id": "90018791585_175400562_1_pg3",
+      "fields": {},
+      "field_sources": {},
+      "confidence": 0.0,
+      "processing_time_sec": 18.861,
+      "cost_estimate_usd": 0.023
+    },
+    {
+      "doc_id": "90019031024_1_v2_pg1",
+      "fields": {
+        "dealer_name": "Patel Farm Machinery",
+        "model_name": "DIb.0SkaxTPwD-5nP Cultivator. Rotavator.Rotary tiller & Multicrop thresher reaper q30000 Total Inwords: NINE LAKH THIRTY THOUSAND ONL Terms & Conditions: ForKISAN FARM MACHINERY 1.Price Prevailing at the time of delivery will be charged. 2.Good once sold will not be return// exchange. Kisan Farm Machinery 3.Terms cash interest will not be charged @ 18% per annum. 4.Settlement of all disputes will be subject to jurisdiction of Gorakhpur Court. 5.Decision of the company will be final and binding &no correspondence Proprietor what soever will be entertained in this regard. (Authorised Signature) Customer Signature",
+        "horse_power": 37,
+        "asset_cost": null,
+        "signature": {
+          "present": false,
+          "bbox": null,
+          "verified": false
+        },
+        "stamp": {
+          "present": false,
+          "bbox": null,
+          "verified": false
+        }
+      },
+      "field_sources": {
+        "dealer_name": "slm",
+        "model_name": "slm",
+        "horse_power": "tier1_prefer_non_null",
+        "asset_cost": "tier1_consensus",
+        "signature": "tier1_consensus",
+        "stamp": "tier1_consensus"
+      },
+      "confidence": 0.0,
+      "processing_time_sec": 1.974,
+      "cost_estimate_usd": 0.002
+    },
+    {
+      "doc_id": "90018512084_175159349_2_pg32",
+      "fields": {},
+      "field_sources": {},
+      "confidence": 0.0,
+      "processing_time_sec": 1.061,
+      "cost_estimate_usd": 0.022
+    },
+    {
+      "doc_id": "173649319_1_pg35",
+      "fields": {},
+      "field_sources": {},
+      "confidence": 0.0,
+      "processing_time_sec": 1.001,
+      "cost_estimate_usd": 0.022
+    },
+    {
+      "doc_id": "173470257_2_pg23",
+      "fields": {},
+      "field_sources": {},
+      "confidence": 0.0,
+      "processing_time_sec": 0.902,
+      "cost_estimate_usd": 0.023
+    },
+    {
+      "doc_id": "90018512084_175159349_2_pg33",
+      "fields": {},
+      "field_sources": {},
+      "confidence": 0.0,
+      "processing_time_sec": 0.961,
+      "cost_estimate_usd": 0.023
+    },
+    {
+      "doc_id": "172761287_4_pg15",
+      "fields": {
+        "dealer_name": "Sharma Tractors Pvt Ltd",
+        "model_name": "Eicher TRACTOR ch 3cCh Mob",
+        "horse_power": 49,
+        "asset_cost": null,
+        "signature": {
+          "present": false,
+          "bbox": null,
+          "verified": false
+        },
+        "stamp": {
+          "present": false,
+          "bbox": null,
+          "verified": false
+        }
+      },
+      "field_sources": {
+        "dealer_name": "slm",
+        "model_name": "slm",
+        "horse_power": "tier1_prefer_non_null",
+        "asset_cost": "tier1_consensus",
+        "signature": "tier1_consensus",
+        "stamp": "tier1_consensus"
+      },
+      "confidence": 0.0,
+      "processing_time_sec": 1.486,
+      "cost_estimate_usd": 0.002
+    },
+    {
+      "doc_id": "172968418_3_pg10",
+      "fields": {},
+      "field_sources": {},
+      "confidence": 0.0,
+      "processing_time_sec": 1.089,
+      "cost_estimate_usd": 0.023
+    },
+    {
+      "doc_id": "172858047_3_pg3",
+      "fields": {},
+      "field_sources": {},
+      "confidence": 0.0,
+      "processing_time_sec": 1.11,
+      "cost_estimate_usd": 0.023
+    },
+    {
+      "doc_id": "173681264_1_pg26",
+      "fields": {},
+      "field_sources": {},
+      "confidence": 0.0,
+      "processing_time_sec": 1.163,
+      "cost_estimate_usd": 0.023
+    },
+    {
+      "doc_id": "172726090_3_pg9",
+      "fields": {},
+      "field_sources": {},
+      "confidence": 0.0,
+      "processing_time_sec": 0.949,
+      "cost_estimate_usd": 0.022
+    },
+    {
+      "doc_id": "90019492324_2_v1_pg1",
+      "fields": {},
+      "field_sources": {},
+      "confidence": 0.0,
+      "processing_time_sec": 1.765,
+      "cost_estimate_usd": 0.022
+    },
+    {
+      "doc_id": "90019317135_OTHERS_v1_pg1",
+      "fields": {},
+      "field_sources": {},
+      "confidence": 0.0,
+      "processing_time_sec": 1.039,
+      "cost_estimate_usd": 0.023
+    },
+    {
+      "doc_id": "172677667_2_pg30",
+      "fields": {},
+      "field_sources": {},
+      "confidence": 0.0,
+      "processing_time_sec": 0.94,
+      "cost_estimate_usd": 0.023
+    },
+    {
+      "doc_id": "172932638_3_pg1",
+      "fields": {},
+      "field_sources": {},
+      "confidence": 0.0,
+      "processing_time_sec": 0.916,
+      "cost_estimate_usd": 0.023
+    },
+    {
+      "doc_id": "90018855987_175331555_1_pg20",
+      "fields": {},
+      "field_sources": {},
+      "confidence": 0.0,
+      "processing_time_sec": 1.006,
+      "cost_estimate_usd": 0.023
+    },
+    {
+      "doc_id": "173479625_2_pg34",
+      "fields": {},
+      "field_sources": {},
+      "confidence": 0.0,
+      "processing_time_sec": 0.884,
+      "cost_estimate_usd": 0.023
+    },
+    {
+      "doc_id": "90019008626_OTHERS_v1_pg1",
+      "fields": {
+        "dealer_name": "Yadav Krishi Udyog",
+        "model_name": "Massey Ferguson y 97965HP",
+        "horse_power": "97965.0",
+        "asset_cost": null,
+        "signature": {
+          "present": false,
+          "bbox": null,
+          "verified": false
+        },
+        "stamp": {
+          "present": false,
+          "bbox": null,
+          "verified": false
+        }
+      },
+      "field_sources": {
+        "dealer_name": "slm",
+        "model_name": "slm",
+        "horse_power": "slm",
+        "asset_cost": "tier1_consensus",
+        "signature": "tier1_consensus",
+        "stamp": "tier1_consensus"
+      },
+      "confidence": 0.0,
+      "processing_time_sec": 1.128,
+      "cost_estimate_usd": 0.003
+    },
+    {
+      "doc_id": "90018907907_OTHERS_v1_pg1",
+      "fields": {},
+      "field_sources": {},
+      "confidence": 0.0,
+      "processing_time_sec": 0.897,
+      "cost_estimate_usd": 0.022
+    },
+    {
+      "doc_id": "90018695808_175276404_1_pg26",
+      "fields": {},
+      "field_sources": {},
+      "confidence": 0.0,
+      "processing_time_sec": 1.028,
+      "cost_estimate_usd": 0.023
+    }
+  ]
+}

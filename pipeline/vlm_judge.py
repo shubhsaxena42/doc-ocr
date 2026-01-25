@@ -2,7 +2,13 @@
 VLM Judge Module
 
 Qwen2.5-VL-7B integration for Tier 3 visual adjudication.
-Uses 4-bit quantization for efficient inference on image crops.
+Uses 8-bit quantization for accurate inference on document images.
+
+Key Design Principles:
+1. VERIFICATION over EXTRACTION: Ask VLM to choose between OCR values, not re-extract
+2. LABEL ANCHORING: Always instruct VLM to find the label first, then read the value
+3. HIGH RESOLUTION: Preserve document detail with minimal downsampling
+4. FULL IMAGE CONTEXT: VLM always sees the full document, not just crops
 """
 
 import time
@@ -37,64 +43,171 @@ class VLMJudge:
     """
     Vision Language Model judge for Tier 3 adjudication.
     
-    Uses Qwen2.5-VL-7B with 4-bit quantization.
-    Analyzes image crops to resolve visual ambiguities.
+    Uses Qwen2.5-VL-7B with 8-bit quantization for accuracy.
+    Analyzes FULL document images to verify OCR extractions.
+    
+    KEY IMPROVEMENT: Uses VERIFICATION mode instead of EXTRACTION mode.
+    Instead of asking "What is the value?", we ask "Which of these is correct?"
     """
     
-    # Prompt templates for different field types
-    PROMPTS = {
-        "dealer_name": """Look at this cropped region from a document. 
-What is the dealer/seller name visible in this image?
-If unclear, respond with UNCERTAIN.
-Respond with just the name, nothing else.""",
+    # VERIFICATION prompts with label anchoring (Issue #2, #6 fixes)
+    # These ask VLM to VERIFY between two options, not re-extract
+    VERIFICATION_PROMPTS = {
+        "dealer_name": """You are verifying OCR results on a tractor/vehicle invoice.
+
+Two OCR engines extracted different values for the DEALER/SELLER NAME:
+  Option A: "{value1}"
+  Option B: "{value2}"
+
+INSTRUCTIONS:
+1. First, locate the LABEL: Look for text like "Dealer:", "Seller:", "From:", or a company letterhead at the top.
+2. Then read the VALUE printed next to or below that label.
+3. Choose which option (A or B) matches what you see, or say NEITHER if both are wrong.
+
+Respond in this format:
+CHOICE: [A or B or NEITHER]
+REASON: [brief explanation]""",
         
-        "model_name": """Look at this cropped region from a document.
-What is the tractor/vehicle model name visible in this image?
-If unclear, respond with UNCERTAIN.
+        "model_name": """You are verifying OCR results on a tractor/vehicle invoice.
+
+Two OCR engines extracted different values for the TRACTOR/VEHICLE MODEL:
+  Option A: "{value1}"
+  Option B: "{value2}"
+
+INSTRUCTIONS:
+1. First, locate the LABEL: Look for "Model:", "Tractor Model:", "Vehicle:", or in a product description.
+2. Look for brand names like Mahindra, Massey Ferguson, John Deere, New Holland, Eicher, Kubota, Swaraj, etc.
+3. The model should include brand + model number (e.g., "Mahindra 575 DI", "Massey Ferguson 1035").
+4. Choose which option (A or B) matches what you see, or say NEITHER if both are wrong.
+
+Respond in this format:
+CHOICE: [A or B or NEITHER]
+REASON: [brief explanation]""",
+        
+        "horse_power": """You are verifying OCR results on a tractor/vehicle invoice.
+
+Two OCR engines extracted different values for HORSE POWER:
+  Option A: "{value1}" HP
+  Option B: "{value2}" HP
+
+INSTRUCTIONS:
+1. First, locate the LABEL: Look for "HP", "Horse Power", "H.P.", or "H/P" printed on the document.
+2. Read the NUMBER printed directly before or after that label.
+3. Typical tractor HP values are between 20-100 HP. Values outside this range are suspicious.
+4. Choose which option (A or B) matches what you see, or say NEITHER if both are wrong.
+
+Respond in this format:
+CHOICE: [A or B or NEITHER]
+REASON: [brief explanation]""",
+        
+        "asset_cost": """You are verifying OCR results on a tractor/vehicle invoice.
+
+Two OCR engines extracted different values for the TOTAL COST/PRICE:
+  Option A: Rs. {value1}
+  Option B: Rs. {value2}
+
+INSTRUCTIONS:
+1. First, locate the LABEL: Look for "Total", "Grand Total", "Amount", "Price", or "Cost".
+2. Read the RUPEE VALUE printed next to that label (may be in lakhs, e.g., "8,50,000" = 850000).
+3. Tractor prices typically range from Rs. 3,00,000 to Rs. 15,00,000.
+4. Choose which option (A or B) is closer to what you see, or say NEITHER if both are wrong.
+
+Respond in this format:
+CHOICE: [A or B or NEITHER]
+REASON: [brief explanation]""",
+        
+        "signature": """You are verifying if a SIGNATURE exists on this tractor invoice.
+
+Two OCR engines disagree about whether a signature is present:
+  Option A: {value1}
+  Option B: {value2}
+
+INSTRUCTIONS:
+1. Look for a handwritten signature, typically near the bottom of the document.
+2. Look for labels like "Customer's Signature", "Authorized Signatory", or similar.
+3. A signature looks like handwritten cursive or scribbles, not printed text.
+
+Respond in this format:
+CHOICE: [A or B]
+REASON: [describe what you see - signature present or not]""",
+        
+        "stamp": """You are verifying if an OFFICIAL STAMP/SEAL exists on this tractor invoice.
+
+Two OCR engines disagree about whether a stamp is present:
+  Option A: {value1}
+  Option B: {value2}
+
+INSTRUCTIONS:
+1. Look for a circular or rectangular stamp, usually blue, red, or purple ink.
+2. Official stamps often contain company names, addresses, or "Authorized" text.
+3. Stamps may be partially overlapping text or near signatures.
+
+Respond in this format:
+CHOICE: [A or B]
+REASON: [describe what you see - stamp present or not]"""
+    }
+    
+    # Legacy extraction prompts (kept for fallback)
+    PROMPTS = {
+        "dealer_name": """Look at this invoice document.
+Find the LABEL: "Dealer", "Seller", "From", or company letterhead.
+Read the VALUE next to that label.
+Respond with just the dealer/company name, nothing else.""",
+        
+        "model_name": """Look at this invoice document.
+Find the LABEL: "Model", "Tractor Model", or "Vehicle".
+Read the VALUE next to that label (should include brand + model number).
 Respond with just the model name, nothing else.""",
         
-        "horse_power": """Look at this cropped region from a document.
-What is the horse power (HP) value visible in this image?
-If unclear, respond with UNCERTAIN.
-Respond with just the number, nothing else.""",
+        "horse_power": """Look at this invoice document.
+Find the LABEL: "HP", "Horse Power", "H.P.", or "H/P".
+Read the NUMBER next to that label.
+Respond with just the HP number (e.g., 45), nothing else.""",
         
-        "asset_cost": """Look at this cropped region from a document.
-What is the price/cost/amount visible in this image?
-If unclear, respond with UNCERTAIN.
-Respond with just the numeric value, nothing else.""",
+        "asset_cost": """Look at this invoice document.
+Find the LABEL: "Total", "Grand Total", "Amount", or "Price".
+Read the RUPEE VALUE next to that label.
+Respond with just the numeric value (e.g., 850000), nothing else.""",
         
-        "signature": """Look at this cropped region from a document.
-Is there a handwritten signature in this image?
+        "signature": """Look at this document.
+Is there a HANDWRITTEN SIGNATURE visible? Look near "Customer's Signature" or "Authorized Signatory" labels.
 Respond with YES or NO.""",
         
-        "stamp": """Look at this cropped region from a document.
-Is there an official stamp or seal in this image?
+        "stamp": """Look at this document.
+Is there an OFFICIAL STAMP or SEAL visible? (circular/rectangular, colored ink)
 Respond with YES or NO.""",
         
-        "general": """Look at this cropped region from a document.
-What text is visible in this area? The OCR engines disagree:
-Option 1: "{value1}"
-Option 2: "{value2}"
+        "general": """Look at this document region.
+The OCR engines disagree:
+  Option A: "{value1}"
+  Option B: "{value2}"
 Which is correct? Respond with just the correct text."""
     }
+    
+    # Higher resolution limits (Issue #3 fix)
+    DEFAULT_MAX_SIZE = 2048  # Was 1024 - preserve more detail
+    DEFAULT_CROP_SIZE = (400, 400)  # Was (200, 200) - larger crops for small text
     
     def __init__(
         self,
         model_name: str = "Qwen/Qwen2.5-VL-7B-Instruct",
-        crop_size: Tuple[int, int] = (200, 200),
-        use_quantization: bool = True
+        crop_size: Tuple[int, int] = None,
+        use_quantization: bool = True,
+        quantization_bits: int = 8  # Changed from 4-bit to 8-bit (Issue #5 fix)
     ):
         """
         Initialize VLM judge.
         
         Args:
             model_name: HuggingFace model name
-            crop_size: Default crop size for disputed regions
-            use_quantization: Whether to use 4-bit quantization
+            crop_size: Default crop size for disputed regions (default: 400x400)
+            use_quantization: Whether to use quantization
+            quantization_bits: Bits for quantization (4 or 8, default: 8 for accuracy)
         """
         self.model_name = model_name
-        self.crop_size = crop_size
+        self.crop_size = crop_size or self.DEFAULT_CROP_SIZE
         self.use_quantization = use_quantization
+        self.quantization_bits = quantization_bits
         self.model = None
         self.processor = None
         self._initialized = False
@@ -106,31 +219,45 @@ Which is correct? Respond with just the correct text."""
             return
         
         try:
-            from transformers import AutoProcessor, Qwen2VLForConditionalGeneration
+            # Use AutoModelForCausalLM with trust_remote_code for Qwen 2.5 VL
+            # This works with all transformers versions
+            from transformers import AutoProcessor, AutoModelForCausalLM
             import torch
             
             # Configure quantization
             model_kwargs = {
                 "torch_dtype": torch.float16,
-                "device_map": "auto"
+                "device_map": "auto",
+                "trust_remote_code": True  # Required for Qwen models
             }
             
             if self.use_quantization:
                 try:
                     from transformers import BitsAndBytesConfig
                     
-                    quantization_config = BitsAndBytesConfig(
-                        load_in_4bit=True,
-                        bnb_4bit_compute_dtype=torch.float16,
-                        bnb_4bit_use_double_quant=True,
-                        bnb_4bit_quant_type="nf4"
-                    )
+                    # Use 8-bit quantization for better accuracy (Issue #5 fix)
+                    # 4-bit degrades fine-grained character recognition too much
+                    if self.quantization_bits == 4:
+                        quantization_config = BitsAndBytesConfig(
+                            load_in_4bit=True,
+                            bnb_4bit_compute_dtype=torch.float16,
+                            bnb_4bit_use_double_quant=True,
+                            bnb_4bit_quant_type="nf4"
+                        )
+                    else:  # Default to 8-bit for accuracy
+                        quantization_config = BitsAndBytesConfig(
+                            load_in_8bit=True,
+                            llm_int8_threshold=6.0
+                        )
                     model_kwargs["quantization_config"] = quantization_config
                 except ImportError:
                     print("bitsandbytes not available, using float16")
             
-            self.processor = AutoProcessor.from_pretrained(self.model_name)
-            self.model = Qwen2VLForConditionalGeneration.from_pretrained(
+            self.processor = AutoProcessor.from_pretrained(
+                self.model_name,
+                trust_remote_code=True
+            )
+            self.model = AutoModelForCausalLM.from_pretrained(
                 self.model_name,
                 **model_kwargs
             )
@@ -139,6 +266,9 @@ Which is correct? Respond with just the correct text."""
             
         except Exception as e:
             print(f"VLM initialization error: {e}")
+            print("Possible solutions:")
+            print("1. Install qwen-vl-utils: pip install qwen-vl-utils")
+            print("2. Upgrade transformers: pip install --upgrade transformers")
             self._initialized = True  # Prevent repeated attempts
     
     @property
@@ -246,6 +376,76 @@ Which is correct? Respond with just the correct text."""
                 latency=latency
             )
     
+    def judge_crop_from_path(
+        self,
+        image_path: str,
+        field_name: str,
+        bbox: List[int],
+        padding: float = 0.2
+    ) -> VLMJudgment:
+        """
+        Judge a field using a TIGHT CROP from the image.
+        
+        KEY IMPROVEMENT: For visual fields like signatures/stamps,
+        sending a focused crop (with 20% padding) is more accurate
+        than sending the full 2048px image.
+        
+        Args:
+            image_path: Path to the full document image
+            field_name: Name of the field (signature, stamp)
+            bbox: Bounding box [x1, y1, x2, y2] from YOLO detector
+            padding: Padding ratio (0.2 = 20% padding around bbox)
+            
+        Returns:
+            VLMJudgment with resolved value
+        """
+        import cv2
+        
+        start_time = time.time()
+        self._invocation_count += 1
+        
+        try:
+            # Load image
+            image = cv2.imread(image_path)
+            if image is None:
+                return VLMJudgment(
+                    resolved_value=None,
+                    confidence=0.0,
+                    status="ERROR",
+                    reasoning=f"Could not load image: {image_path}",
+                    latency=time.time() - start_time
+                )
+            
+            h, w = image.shape[:2]
+            x1, y1, x2, y2 = bbox
+            
+            # Add padding
+            pad_w = int((x2 - x1) * padding)
+            pad_h = int((y2 - y1) * padding)
+            
+            x1 = max(0, x1 - pad_w)
+            y1 = max(0, y1 - pad_h)
+            x2 = min(w, x2 + pad_w)
+            y2 = min(h, y2 + pad_h)
+            
+            # Crop
+            crop = image[y1:y2, x1:x2]
+            
+            # Convert BGR to RGB
+            crop_rgb = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
+            
+            # Use the existing judge_crop method
+            return self.judge_crop(crop_rgb, field_name, "", "")
+            
+        except Exception as e:
+            return VLMJudgment(
+                resolved_value=None,
+                confidence=0.0,
+                status="ERROR",
+                reasoning=f"Crop error: {str(e)}",
+                latency=time.time() - start_time
+            )
+    
     def judge_from_image(
         self,
         image_path: str,
@@ -256,24 +456,62 @@ Which is correct? Respond with just the correct text."""
         padding: int = 20
     ) -> VLMJudgment:
         """
-        Extract crop from image and judge.
+        Judge a field by viewing the FULL image with VERIFICATION prompts.
+        
+        IMPROVED: Uses verification mode - asks VLM to choose between OCR values
+        instead of re-extracting from scratch.
         
         Args:
             image_path: Path to full image
-            bbox: Bounding box [x, y, width, height]
+            bbox: Bounding box (ignored - VLM sees full image for context)
             field_name: Name of the field
-            value1: First OCR value
-            value2: Second OCR value
-            padding: Extra pixels around crop
+            value1: First OCR value (from engine 1)
+            value2: Second OCR value (from engine 2)
+            padding: Ignored (kept for backwards compatibility)
             
         Returns:
-            VLMJudgment with resolved value
+            VLMJudgment with resolved value (one of value1, value2, or new extraction)
+        """
+        # Use the new verification-based method
+        return self.adjudicate_conflict(image_path, field_name, value1, value2)
+    
+    def adjudicate_conflict(
+        self,
+        image_path: str,
+        field_name: str,
+        value1: Any,
+        value2: Any
+    ) -> VLMJudgment:
+        """
+        Adjudicate between two OCR values using VERIFICATION mode.
+        
+        KEY IMPROVEMENT: Instead of asking "What is the value?", we ask
+        "Which of these two options (A or B) is correct?"
+        
+        This leverages the work already done by OCR engines and gives the VLM
+        a simpler, more constrained task.
+        
+        Args:
+            image_path: Path to the full document image
+            field_name: Name of the field being adjudicated
+            value1: First OCR value (Option A)
+            value2: Second OCR value (Option B)
+            
+        Returns:
+            VLMJudgment with the chosen value and reasoning
         """
         import cv2
         
         start_time = time.time()
+        self._invocation_count += 1
+        
+        self._lazy_init()
+        
+        if self.model is None:
+            return self._fallback_judge(field_name, start_time)
         
         try:
+            # Load FULL image
             image = cv2.imread(image_path)
             if image is None:
                 return VLMJudgment(
@@ -284,26 +522,185 @@ Which is correct? Respond with just the correct text."""
                     latency=time.time() - start_time
                 )
             
-            # Extract crop with padding
-            x, y, w, h = bbox
-            x1 = max(0, x - padding)
-            y1 = max(0, y - padding)
-            x2 = min(image.shape[1], x + w + padding)
-            y2 = min(image.shape[0], y + h + padding)
+            # Convert to RGB
+            image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
             
-            crop = image[y1:y2, x1:x2]
-            crop_rgb = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
+            # Resize with HIGHER resolution limit (Issue #3 fix)
+            max_dim = self.DEFAULT_MAX_SIZE  # 2048px instead of 1024px
+            h, w = image_rgb.shape[:2]
+            if max(h, w) > max_dim:
+                scale = max_dim / max(h, w)
+                new_w, new_h = int(w * scale), int(h * scale)
+                # Use LANCZOS for higher quality downsampling
+                pil_image = Image.fromarray(image_rgb)
+                pil_image = pil_image.resize((new_w, new_h), Image.Resampling.LANCZOS)
+            else:
+                pil_image = Image.fromarray(image_rgb)
             
-            return self.judge_crop(crop_rgb, field_name, value1, value2)
+            # Get VERIFICATION prompt (Issue #2 fix)
+            if field_name in self.VERIFICATION_PROMPTS:
+                prompt = self.VERIFICATION_PROMPTS[field_name].format(
+                    value1=str(value1) if value1 else "NOT_FOUND",
+                    value2=str(value2) if value2 else "NOT_FOUND"
+                )
+            else:
+                # Fallback to general verification
+                prompt = f"""You are verifying OCR results on a document.
+
+Two OCR engines extracted different values for {field_name}:
+  Option A: "{value1}"
+  Option B: "{value2}"
+
+Look at the document and decide which option is correct.
+
+Respond in this format:
+CHOICE: [A or B or NEITHER]
+REASON: [brief explanation]"""
+            
+            # Prepare conversation format for Qwen2-VL
+            messages = [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image", "image": pil_image},
+                        {"type": "text", "text": prompt}
+                    ]
+                }
+            ]
+            
+            # Process inputs
+            text = self.processor.apply_chat_template(
+                messages, tokenize=False, add_generation_prompt=True
+            )
+            
+            inputs = self.processor(
+                text=[text],
+                images=[pil_image],
+                return_tensors="pt",
+                padding=True
+            )
+            
+            if hasattr(self.model, "device"):
+                inputs = {k: v.to(self.model.device) for k, v in inputs.items()}
+            
+            # Generate with slightly higher temperature for better reasoning
+            generated_ids = self.model.generate(
+                **inputs,
+                max_new_tokens=150,
+                temperature=0.2,
+                do_sample=True
+            )
+            
+            # Decode response
+            generated_ids_trimmed = [
+                out_ids[len(in_ids):] 
+                for in_ids, out_ids in zip(inputs["input_ids"], generated_ids)
+            ]
+            response = self.processor.batch_decode(
+                generated_ids_trimmed,
+                skip_special_tokens=True
+            )[0]
+            
+            # Parse verification response
+            return self._parse_verification_response(
+                response, field_name, value1, value2, start_time
+            )
             
         except Exception as e:
             return VLMJudgment(
                 resolved_value=None,
                 confidence=0.0,
                 status="ERROR",
-                reasoning=f"Crop error: {str(e)}",
+                reasoning=f"VLM adjudication error: {str(e)}",
                 latency=time.time() - start_time
             )
+    
+    def _parse_verification_response(
+        self,
+        response: str,
+        field_name: str,
+        value1: Any,
+        value2: Any,
+        start_time: float
+    ) -> VLMJudgment:
+        """
+        Parse VLM verification response.
+        
+        Looks for CHOICE: A/B/NEITHER and REASON: ...
+        """
+        import re
+        
+        latency = time.time() - start_time
+        response_upper = response.upper()
+        
+        # Extract choice
+        choice_match = re.search(r'CHOICE:\s*([ABN]|NEITHER)', response_upper)
+        reason_match = re.search(r'REASON:\s*(.+?)(?:\n|$)', response, re.IGNORECASE)
+        
+        reasoning = reason_match.group(1).strip() if reason_match else response
+        
+        if choice_match:
+            choice = choice_match.group(1).strip()
+            
+            if choice == 'A':
+                return VLMJudgment(
+                    resolved_value=value1,
+                    confidence=0.9,
+                    status="RESOLVED",
+                    reasoning=f"VLM chose Option A: {reasoning}",
+                    latency=latency,
+                    metadata={"choice": "A", "verification_mode": True}
+                )
+            elif choice == 'B':
+                return VLMJudgment(
+                    resolved_value=value2,
+                    confidence=0.9,
+                    status="RESOLVED",
+                    reasoning=f"VLM chose Option B: {reasoning}",
+                    latency=latency,
+                    metadata={"choice": "B", "verification_mode": True}
+                )
+            else:  # NEITHER or N
+                # Both options wrong - return uncertain and let fallback handle
+                return VLMJudgment(
+                    resolved_value=None,
+                    confidence=0.3,
+                    status="UNCERTAIN",
+                    reasoning=f"VLM rejected both options: {reasoning}",
+                    latency=latency,
+                    metadata={"choice": "NEITHER", "verification_mode": True}
+                )
+        
+        # Fallback: Check if response contains one of the values
+        response_lower = response.lower()
+        val1_str = str(value1).lower() if value1 else ""
+        val2_str = str(value2).lower() if value2 else ""
+        
+        if val1_str and val1_str in response_lower:
+            return VLMJudgment(
+                resolved_value=value1,
+                confidence=0.75,
+                status="RESOLVED",
+                reasoning=f"VLM response contains value1: {reasoning}",
+                latency=latency
+            )
+        elif val2_str and val2_str in response_lower:
+            return VLMJudgment(
+                resolved_value=value2,
+                confidence=0.75,
+                status="RESOLVED",
+                reasoning=f"VLM response contains value2: {reasoning}",
+                latency=latency
+            )
+        
+        # Cannot determine choice
+        return VLMJudgment(
+            resolved_value=None,
+            confidence=0.0,
+            status="UNCERTAIN",
+            reasoning=f"Could not parse VLM choice: {response[:100]}",
+            latency=latency
+        )
     
     def _parse_response(
         self,
@@ -378,6 +775,263 @@ Which is correct? Respond with just the correct text."""
             reasoning="VLM not available",
             latency=latency
         )
+    
+    def extract_all_fields(
+        self,
+        image_path: str,
+        fields: List[str] = None
+    ) -> Dict[str, VLMJudgment]:
+        """
+        Extract ALL fields from document image using VLM.
+        
+        This is called when VLM is invoked for any field - it extracts
+        all fields at once from the full image, ignoring previous tier results.
+        
+        Args:
+            image_path: Path to the document image
+            fields: List of field names to extract (default: all 6 fields)
+            
+        Returns:
+            Dict mapping field_name to VLMJudgment
+        """
+        import re
+        
+        start_time = time.time()
+        self._invocation_count += 1
+        
+        if fields is None:
+            fields = ["dealer_name", "model_name", "horse_power", "asset_cost", "signature", "stamp"]
+        
+        self._lazy_init()
+        
+        results = {}
+        
+        if self.model is None:
+            # Model not available, return uncertain for all fields
+            latency = time.time() - start_time
+            for field_name in fields:
+                results[field_name] = VLMJudgment(
+                    resolved_value=None,
+                    confidence=0.0,
+                    status="UNCERTAIN",
+                    reasoning="VLM model not available",
+                    latency=latency
+                )
+            return results
+        
+        try:
+            # Load full image
+            pil_image = Image.open(image_path)
+            
+            # Resize if too large - use HIGHER resolution (Issue #3 fix)
+            max_size = self.DEFAULT_MAX_SIZE  # 2048px instead of 1024px
+            if pil_image.size[0] > max_size or pil_image.size[1] > max_size:
+                pil_image.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
+            
+            # Comprehensive extraction prompt WITH LABEL ANCHORING (Issue #6 fix)
+            extraction_prompt = """You are an expert document AI extracting information from a tractor/vehicle invoice.
+
+IMPORTANT: For each field, FIRST find the LABEL on the document, THEN read the VALUE next to it.
+
+FIELDS TO EXTRACT:
+
+1. DEALER_NAME
+   - FIND LABEL: "Dealer", "Seller", "From", or company letterhead at top
+   - READ VALUE: The company/dealer name next to or below the label
+
+2. MODEL_NAME
+   - FIND LABEL: "Model", "Tractor Model", "Vehicle", or in product description
+   - READ VALUE: Brand + model number (e.g., "Mahindra 575 DI", "Massey Ferguson 1035")
+   - Look for brands: Mahindra, Massey Ferguson, John Deere, New Holland, Eicher, Kubota, Swaraj, Sonalika, Powertrac
+
+3. HORSE_POWER
+   - FIND LABEL: "HP", "Horse Power", "H.P.", "H/P"
+   - READ VALUE: The number next to that label (typical range: 20-100 HP)
+
+4. ASSET_COST
+   - FIND LABEL: "Total", "Grand Total", "Amount", "Price"
+   - READ VALUE: The rupee amount (typical range: Rs. 3-15 lakh)
+
+5. SIGNATURE
+   - LOOK FOR: Handwritten cursive marks near "Customer's Signature" or "Authorized Signatory"
+
+6. STAMP
+   - LOOK FOR: Circular/rectangular colored ink marks (blue, red, purple)
+
+Respond in this EXACT format:
+DEALER_NAME: [value or NOT_FOUND]
+MODEL_NAME: [value or NOT_FOUND]
+HORSE_POWER: [number or NOT_FOUND]
+ASSET_COST: [number or NOT_FOUND]
+SIGNATURE: [YES/NO]
+STAMP: [YES/NO]
+CONFIDENCE: [high/medium/low]"""
+
+            # Prepare conversation format for Qwen2-VL
+            messages = [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image", "image": pil_image},
+                        {"type": "text", "text": extraction_prompt}
+                    ]
+                }
+            ]
+            
+            # Process inputs
+            text = self.processor.apply_chat_template(
+                messages, tokenize=False, add_generation_prompt=True
+            )
+            
+            inputs = self.processor(
+                text=[text],
+                images=[pil_image],
+                return_tensors="pt",
+                padding=True
+            )
+            
+            if hasattr(self.model, "device"):
+                inputs = {k: v.to(self.model.device) for k, v in inputs.items()}
+            
+            # Generate
+            generated_ids = self.model.generate(
+                **inputs,
+                max_new_tokens=300,
+                temperature=0.1,
+                do_sample=True
+            )
+            
+            # Decode response
+            generated_ids_trimmed = [
+                out_ids[len(in_ids):] 
+                for in_ids, out_ids in zip(inputs["input_ids"], generated_ids)
+            ]
+            response = self.processor.batch_decode(
+                generated_ids_trimmed,
+                skip_special_tokens=True
+            )[0]
+            
+            latency = time.time() - start_time
+            
+            # Parse the response for each field
+            results = self._parse_all_fields_response(response, fields, latency)
+            
+        except Exception as e:
+            latency = time.time() - start_time
+            for field_name in fields:
+                results[field_name] = VLMJudgment(
+                    resolved_value=None,
+                    confidence=0.0,
+                    status="ERROR",
+                    reasoning=f"VLM extraction error: {str(e)}",
+                    latency=latency
+                )
+        
+        return results
+    
+    def _parse_all_fields_response(
+        self,
+        response: str,
+        fields: List[str],
+        latency: float
+    ) -> Dict[str, VLMJudgment]:
+        """Parse the all-fields VLM extraction response."""
+        import re
+        
+        results = {}
+        
+        # Extract confidence level
+        conf_match = re.search(r'CONFIDENCE:\s*(\w+)', response, re.IGNORECASE)
+        confidence_str = conf_match.group(1).lower() if conf_match else "medium"
+        confidence_map = {"high": 0.90, "medium": 0.75, "low": 0.60}
+        base_confidence = confidence_map.get(confidence_str, 0.75)
+        
+        # Field name mapping
+        field_patterns = {
+            "dealer_name": r'DEALER_NAME:\s*(.+?)(?:\n|$)',
+            "model_name": r'MODEL_NAME:\s*(.+?)(?:\n|$)',
+            "horse_power": r'HORSE_POWER:\s*(.+?)(?:\n|$)',
+            "asset_cost": r'ASSET_COST:\s*(.+?)(?:\n|$)',
+            "signature": r'SIGNATURE:\s*(.+?)(?:\n|$)',
+            "stamp": r'STAMP:\s*(.+?)(?:\n|$)'
+        }
+        
+        for field_name in fields:
+            pattern = field_patterns.get(field_name)
+            if not pattern:
+                results[field_name] = VLMJudgment(
+                    resolved_value=None,
+                    confidence=0.0,
+                    status="UNCERTAIN",
+                    reasoning="Unknown field",
+                    latency=latency
+                )
+                continue
+            
+            match = re.search(pattern, response, re.IGNORECASE)
+            if match:
+                value = match.group(1).strip()
+                
+                # Check for NOT_FOUND
+                if "NOT_FOUND" in value.upper() or not value:
+                    results[field_name] = VLMJudgment(
+                        resolved_value=None,
+                        confidence=0.0,
+                        status="RESOLVED",
+                        reasoning="VLM could not find field in image",
+                        latency=latency
+                    )
+                else:
+                    # Process field-specific values
+                    if field_name in ["signature", "stamp"]:
+                        is_present = "YES" in value.upper()
+                        results[field_name] = VLMJudgment(
+                            resolved_value={"present": is_present, "bbox": None, "verified": True},
+                            confidence=base_confidence,
+                            status="RESOLVED",
+                            reasoning="VLM document-level extraction",
+                            latency=latency
+                        )
+                    elif field_name == "horse_power":
+                        # Extract numeric HP value
+                        hp_match = re.search(r'(\d+)', value)
+                        hp_value = float(hp_match.group(1)) if hp_match else None
+                        results[field_name] = VLMJudgment(
+                            resolved_value=hp_value,
+                            confidence=base_confidence,
+                            status="RESOLVED",
+                            reasoning="VLM document-level extraction",
+                            latency=latency
+                        )
+                    elif field_name == "asset_cost":
+                        # Extract numeric cost value
+                        cost_clean = re.sub(r'[^\d.]', '', value)
+                        cost_value = float(cost_clean) if cost_clean else None
+                        results[field_name] = VLMJudgment(
+                            resolved_value=cost_value,
+                            confidence=base_confidence,
+                            status="RESOLVED",
+                            reasoning="VLM document-level extraction",
+                            latency=latency
+                        )
+                    else:
+                        results[field_name] = VLMJudgment(
+                            resolved_value=value,
+                            confidence=base_confidence,
+                            status="RESOLVED",
+                            reasoning="VLM document-level extraction",
+                            latency=latency
+                        )
+            else:
+                results[field_name] = VLMJudgment(
+                    resolved_value=None,
+                    confidence=0.0,
+                    status="UNCERTAIN",
+                    reasoning="Field not found in VLM response",
+                    latency=latency
+                )
+        
+        return results
 
 
 # Global instance

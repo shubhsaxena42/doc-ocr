@@ -100,13 +100,15 @@ def main():
     try:
         from pipeline.main_pipeline import create_processor, DocumentProcessor
         from pipeline.cost_tracker import get_tracker, reset_tracker
+        from pipeline.json_logger import get_json_logger, reset_json_logger
     except ImportError as e:
         print(f"Error importing pipeline modules: {e}")
         print("Make sure you're running from the project root directory")
         sys.exit(1)
     
-    # Reset tracker for fresh run
+    # Reset tracker and json logger for fresh run
     reset_tracker()
+    reset_json_logger()
     
     # Create processor
     if args.verbose:
@@ -171,6 +173,12 @@ def main():
     
     if args.verbose:
         print(f"\nResults saved to: {output_path}")
+    
+    # Save JSON results with source attribution
+    json_logger = get_json_logger()
+    json_output_name = output_path.stem + "_with_sources.json"
+    json_output_path = json_logger.save_results(json_output_name)
+    print(f"JSON results with source attribution saved to: {json_output_path}")
     
     # Save cost report if requested
     if args.cost_report:

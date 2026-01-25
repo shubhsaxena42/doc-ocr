@@ -1,0 +1,502 @@
+{
+  "metadata": {
+    "total_processed": 20,
+    "successful": 16,
+    "failed": 4,
+    "note": "Train folder only. Bboxes kept for signature/stamp only."
+  },
+  "results": [
+    {
+      "doc_id": "90018907907_OTHERS_v1_pg1",
+      "filename": "90018907907_OTHERS_v1_pg1.png",
+      "fields": {
+        "dealer_name": "SRI MAHALAKSHMI INTERNATIONAL TRACTORS",
+        "model_name": "SONALIKA DI 730, 35, 740, 745, 750, 55, 60 TRACTOR",
+        "horse_power": 30,
+        "asset_cost": 580000,
+        "signature": {
+          "present": true,
+          "bbox": [
+            10,
+            560,
+            200,
+            580
+          ],
+          "type": "handwritten"
+        },
+        "stamp": {
+          "present": true,
+          "bbox": [
+            600,
+            500,
+            700,
+            600
+          ],
+          "type": "circular"
+        }
+      },
+      "confidence": 0.95,
+      "processing_time_sec": 43.49
+    },
+    {
+      "doc_id": "90019008626_OTHERS_v1_pg1",
+      "filename": "90019008626_OTHERS_v1_pg1.png",
+      "error": "Unterminated string starting at: line 9 column 22 (char 198)",
+      "processing_time_sec": 292.34
+    },
+    {
+      "doc_id": "172932638_3_pg1",
+      "filename": "172932638_3_pg1.png",
+      "fields": {
+        "dealer_name": "JAY BHAGWATI TRACTORS",
+        "model_name": "STEELTRAC 18",
+        "horse_power": 18,
+        "asset_cost": 333392,
+        "signature": {
+          "present": true,
+          "bbox": [
+            10,
+            820,
+            200,
+            840
+          ],
+          "type": "handwritten"
+        },
+        "stamp": {
+          "present": false,
+          "bbox": null
+        }
+      },
+      "confidence": 0.95,
+      "processing_time_sec": 38.47
+    },
+    {
+      "doc_id": "90018855987_175331555_1_pg20",
+      "filename": "90018855987_175331555_1_pg20.png",
+      "error": "Unterminated string starting at: line 9 column 22 (char 198)",
+      "processing_time_sec": 283.68
+    },
+    {
+      "doc_id": "173470257_2_pg23",
+      "filename": "173470257_2_pg23.png",
+      "fields": {
+        "dealer_name": "RAJ MOTORS",
+        "model_name": "3630 Tx Plus",
+        "horse_power": 49.5,
+        "asset_cost": 950000,
+        "signature": {
+          "present": true,
+          "bbox": [
+            10,
+            530,
+            200,
+            550
+          ],
+          "type": "handwritten"
+        },
+        "stamp": {
+          "present": false,
+          "bbox": null,
+          "type": null
+        }
+      },
+      "confidence": 0.95,
+      "processing_time_sec": 35.23
+    },
+    {
+      "doc_id": "90019317135_OTHERS_v1_pg1",
+      "filename": "90019317135_OTHERS_v1_pg1.png",
+      "fields": {
+        "dealer_name": "Nagaur Motors & Tractors",
+        "model_name": "Massey-Ferguson 1035 DI Tractor",
+        "horse_power": 35,
+        "asset_cost": 531900,
+        "signature": {
+          "present": true,
+          "bbox": [
+            500,
+            500,
+            600,
+            550
+          ],
+          "type": "handwritten"
+        },
+        "stamp": {
+          "present": true,
+          "bbox": [
+            500,
+            300,
+            600,
+            400
+          ],
+          "type": "circular"
+        }
+      },
+      "confidence": 0.95,
+      "processing_time_sec": 27.84
+    },
+    {
+      "doc_id": "172968418_3_pg10",
+      "filename": "172968418_3_pg10.png",
+      "error": "Unterminated string starting at: line 9 column 22 (char 198)",
+      "processing_time_sec": 309.84
+    },
+    {
+      "doc_id": "90018512084_175159349_2_pg32",
+      "filename": "90018512084_175159349_2_pg32.png",
+      "fields": {
+        "dealer_name": "M/s. BHAVANI AGRO ENGG. SERVICES",
+        "model_name": "Target 630",
+        "horse_power": 29,
+        "asset_cost": 455386,
+        "signature": {
+          "present": true,
+          "bbox": [
+            0,
+            260,
+            100,
+            280
+          ],
+          "type": "handwritten"
+        },
+        "stamp": {
+          "present": false,
+          "bbox": null
+        }
+      },
+      "confidence": 0.95,
+      "processing_time_sec": 26.59
+    },
+    {
+      "doc_id": "172761287_4_pg15",
+      "filename": "172761287_4_pg15.png",
+      "fields": {
+        "dealer_name": "IDFC FIRST BANK LTD",
+        "model_name": "EICHER TRACTOR",
+        "horse_power": 650,
+        "asset_cost": 650000,
+        "signature": {
+          "present": true,
+          "bbox": [
+            10,
+            450,
+            200,
+            470
+          ],
+          "type": "handwritten"
+        },
+        "stamp": {
+          "present": true,
+          "bbox": [
+            10,
+            430,
+            200,
+            450
+          ],
+          "type": "rectangular"
+        }
+      },
+      "confidence": 0.95,
+      "processing_time_sec": 25.15
+    },
+    {
+      "doc_id": "172726090_3_pg9",
+      "filename": "172726090_3_pg9.png",
+      "fields": {
+        "dealer_name": "M/S SARWAMANGALA TRACTOR",
+        "model_name": "Swaraj 735 FEER",
+        "horse_power": 40,
+        "asset_cost": 759000,
+        "signature": {
+          "present": true,
+          "bbox": [
+            10,
+            610,
+            200,
+            630
+          ],
+          "type": "handwritten"
+        },
+        "stamp": {
+          "present": true,
+          "bbox": [
+            600,
+            10,
+            740,
+            70
+          ],
+          "type": "rectangular"
+        }
+      },
+      "confidence": 0.95,
+      "processing_time_sec": 26.26
+    },
+    {
+      "doc_id": "90018512084_175159349_2_pg33",
+      "filename": "90018512084_175159349_2_pg33.png",
+      "fields": {
+        "dealer_name": "M/s. BHAVANI AGRO ENGG. SERVICES",
+        "model_name": "SWARAJ 630",
+        "horse_power": 29,
+        "asset_cost": 510000,
+        "signature": {
+          "present": true,
+          "bbox": [
+            0,
+            400,
+            200,
+            420
+          ],
+          "type": "handwritten"
+        },
+        "stamp": {
+          "present": false,
+          "bbox": null,
+          "type": null
+        }
+      },
+      "confidence": 0.95,
+      "processing_time_sec": 30.25
+    },
+    {
+      "doc_id": "90019492324_2_v1_pg1",
+      "filename": "90019492324_2_v1_pg1.png",
+      "fields": {
+        "dealer_name": "KALER & GILL TRACTORS",
+        "model_name": "Swaraj",
+        "horse_power": 48,
+        "asset_cost": 770000,
+        "signature": {
+          "present": true,
+          "bbox": [
+            10,
+            380,
+            200,
+            395
+          ],
+          "type": "handwritten"
+        },
+        "stamp": {
+          "present": true,
+          "bbox": [
+            600,
+            10,
+            750,
+            50
+          ],
+          "type": "rectangular"
+        }
+      },
+      "confidence": 0.95,
+      "processing_time_sec": 40.08
+    },
+    {
+      "doc_id": "173479625_2_pg34",
+      "filename": "173479625_2_pg34.png",
+      "fields": {
+        "dealer_name": "Chandra Tractors",
+        "model_name": "EICHER TRACTORS Model 188, 242, 312, 333, 368, 380, 480",
+        "horse_power": 36,
+        "asset_cost": 620000,
+        "signature": {
+          "present": true,
+          "bbox": [
+            10,
+            670,
+            150,
+            690
+          ],
+          "type": "handwritten"
+        },
+        "stamp": {
+          "present": false,
+          "bbox": null,
+          "type": null
+        }
+      },
+      "confidence": 0.95,
+      "processing_time_sec": 28.1
+    },
+    {
+      "doc_id": "90018791585_175400562_1_pg3",
+      "filename": "90018791585_175400562_1_pg3.png",
+      "fields": {
+        "dealer_name": "Shri Gopal Tractor",
+        "model_name": "MF7235",
+        "horse_power": 35,
+        "asset_cost": 565000,
+        "signature": {
+          "present": true,
+          "bbox": [
+            0,
+            1250,
+            200,
+            1300
+          ],
+          "type": "handwritten"
+        },
+        "stamp": {
+          "present": false,
+          "bbox": null,
+          "type": null
+        }
+      },
+      "confidence": 0.95,
+      "processing_time_sec": 37.98
+    },
+    {
+      "doc_id": "173681264_1_pg26",
+      "filename": "173681264_1_pg26.png",
+      "fields": {
+        "dealer_name": "BALAJI TRACTORS",
+        "model_name": "DI-55DC QTB PS 2WD-55HP",
+        "horse_power": 55,
+        "asset_cost": 730000,
+        "signature": {
+          "present": true,
+          "bbox": [
+            10,
+            550,
+            200,
+            570
+          ],
+          "type": "handwritten"
+        },
+        "stamp": {
+          "present": false,
+          "bbox": null
+        }
+      },
+      "confidence": 0.95,
+      "processing_time_sec": 21.87
+    },
+    {
+      "doc_id": "90019031024_1_v2_pg1",
+      "filename": "90019031024_1_v2_pg1.png",
+      "fields": {
+        "dealer_name": "KISAN FARM MACHINERY",
+        "model_name": "DI 60 SIKANDAR DX TPRD - 60 HP",
+        "horse_power": 60,
+        "asset_cost": 930000,
+        "signature": {
+          "present": true,
+          "bbox": [
+            10,
+            760,
+            200,
+            780
+          ],
+          "type": "handwritten"
+        },
+        "stamp": {
+          "present": false,
+          "bbox": null
+        }
+      },
+      "confidence": 0.95,
+      "processing_time_sec": 43.48
+    },
+    {
+      "doc_id": "172677667_2_pg30",
+      "filename": "172677667_2_pg30.png",
+      "fields": {
+        "dealer_name": "SANTOSH MOTORS",
+        "model_name": "SWARAJ - 735 FE",
+        "horse_power": 39,
+        "asset_cost": 700000,
+        "signature": {
+          "present": false,
+          "bbox": [
+            0,
+            0,
+            0,
+            0
+          ],
+          "type": null
+        },
+        "stamp": {
+          "present": false,
+          "bbox": [
+            0,
+            0,
+            0,
+            0
+          ],
+          "type": null
+        }
+      },
+      "confidence": 0.95,
+      "processing_time_sec": 19.54
+    },
+    {
+      "doc_id": "172858047_3_pg3",
+      "filename": "172858047_3_pg3.png",
+      "error": "Unterminated string starting at: line 9 column 22 (char 197)",
+      "processing_time_sec": 353.84
+    },
+    {
+      "doc_id": "173649319_1_pg35",
+      "filename": "173649319_1_pg35.png",
+      "fields": {
+        "dealer_name": "SHRI GANESH MOTORS",
+        "model_name": "SWARAJ 717/724/834/735/843/742/744/855/963",
+        "horse_power": 50,
+        "asset_cost": 850000,
+        "signature": {
+          "present": true,
+          "bbox": [
+            10,
+            460,
+            200,
+            480
+          ],
+          "type": "handwritten"
+        },
+        "stamp": {
+          "present": true,
+          "bbox": [
+            300,
+            10,
+            400,
+            100
+          ],
+          "type": "rectangular"
+        }
+      },
+      "confidence": 0.95,
+      "processing_time_sec": 45.43
+    },
+    {
+      "doc_id": "90018695808_175276404_1_pg26",
+      "filename": "90018695808_175276404_1_pg26.png",
+      "fields": {
+        "dealer_name": "AADHI BHAGAVAN TRACTORS AND IMPLEMENTS",
+        "model_name": "4.515-2WD",
+        "horse_power": 48,
+        "asset_cost": 880000,
+        "signature": {
+          "present": true,
+          "bbox": [
+            10,
+            910,
+            200,
+            930
+          ],
+          "type": "handwritten"
+        },
+        "stamp": {
+          "present": true,
+          "bbox": [
+            400,
+            880,
+            500,
+            900
+          ],
+          "type": "circular"
+        }
+      },
+      "confidence": 0.95,
+      "processing_time_sec": 35.94
+    }
+  ]
+}

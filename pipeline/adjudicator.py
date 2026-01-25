@@ -429,37 +429,107 @@ class AdjudicationLadder:
                         metadata={"vlm_reasoning": vlm_result.reasoning}
                     )
         
-        # Fallback: Use higher confidence value
+        # Fallback: Use SMARTER heuristics (Issue #4 fix)
+        # Don't blindly prefer high confidence - hallucinations often have high confidence
         total_latency = time.time() - total_start
         
-        if conflict.confidence1 >= conflict.confidence2:
+        # Compute quality scores for each value
+        score1 = self._compute_quality_score(conflict.value1, conflict.confidence1, conflict.field_name)
+        score2 = self._compute_quality_score(conflict.value2, conflict.confidence2, conflict.field_name)
+        
+        if score1 >= score2:
             run_logger.log_adjudication_result(
-                conflict.field_name, "Fallback", "confidence_check", conflict.value1, conflict.confidence1 * 0.6
+                conflict.field_name, "Fallback", "quality_heuristics", conflict.value1, score1 * 0.5
             )
             return AdjudicationResult(
                 field_name=conflict.field_name,
                 resolved_value=conflict.value1,
-                confidence=conflict.confidence1 * 0.6,  # Low confidence
+                confidence=score1 * 0.5,  # Low confidence for fallback
                 tier_used=2 if not self.use_tier3 else 3,
-                resolution_method="confidence_fallback",
+                resolution_method="quality_fallback",
                 latency=total_latency,
                 cost=self.COSTS[2] + (self.COSTS[3] if self.use_tier3 else 0),
-                metadata={"fallback": True}
+                metadata={"fallback": True, "quality_score1": score1, "quality_score2": score2}
             )
         else:
             run_logger.log_adjudication_result(
-                conflict.field_name, "Fallback", "confidence_check", conflict.value2, conflict.confidence2 * 0.6
+                conflict.field_name, "Fallback", "quality_heuristics", conflict.value2, score2 * 0.5
             )
             return AdjudicationResult(
                 field_name=conflict.field_name,
                 resolved_value=conflict.value2,
-                confidence=conflict.confidence2 * 0.6,
+                confidence=score2 * 0.5,
                 tier_used=2 if not self.use_tier3 else 3,
-                resolution_method="confidence_fallback",
+                resolution_method="quality_fallback",
                 latency=total_latency,
                 cost=self.COSTS[2] + (self.COSTS[3] if self.use_tier3 else 0),
-                metadata={"fallback": True}
+                metadata={"fallback": True, "quality_score1": score1, "quality_score2": score2}
             )
+    
+    def _compute_quality_score(self, value: Any, confidence: float, field_name: str) -> float:
+        """
+        Compute a quality score for a value that doesn't blindly trust confidence.
+        
+        Issue #4 Fix: High-confidence hallucinations should be penalized.
+        
+        Factors considered:
+        - Non-null values are better
+        - Shorter, cleaner values are often better (garbage OCR is verbose)
+        - Values with excessive special characters are penalized
+        - For numeric fields, plausible ranges are preferred
+        """
+        if value is None:
+            return 0.1  # Very low score for null
+        
+        value_str = str(value)
+        score = confidence  # Start with confidence
+        
+        # Penalize very long values (garbage OCR tends to capture full paragraphs)
+        if len(value_str) > 100:
+            score *= 0.3  # Heavy penalty for paragraph-length "values"
+        elif len(value_str) > 50:
+            score *= 0.6
+        elif len(value_str) > 30:
+            score *= 0.8
+        
+        # Penalize values with excessive special characters (noise indicator)
+        special_char_ratio = sum(1 for c in value_str if not c.isalnum() and c != ' ') / max(len(value_str), 1)
+        if special_char_ratio > 0.3:
+            score *= 0.4  # Heavy penalty for garbage
+        elif special_char_ratio > 0.15:
+            score *= 0.7
+        
+        # For numeric fields, check if value is in plausible range
+        if field_name == "horse_power":
+            try:
+                hp = float(value)
+                if 15 <= hp <= 120:  # Typical tractor HP range
+                    score *= 1.2  # Bonus for plausible value
+                elif hp > 500 or hp < 5:  # Definitely wrong
+                    score *= 0.3
+            except (ValueError, TypeError):
+                pass  # Not a number, keep current score
+        
+        elif field_name == "asset_cost":
+            try:
+                cost = float(value)
+                if 100000 <= cost <= 2000000:  # 1 lakh to 20 lakh (typical tractor range)
+                    score *= 1.2  # Bonus for plausible value
+                elif cost < 1000 or cost > 10000000:  # Definitely wrong
+                    score *= 0.3
+            except (ValueError, TypeError):
+                pass
+        
+        # For text fields, prefer values that look like proper names
+        if field_name in ["dealer_name", "model_name"]:
+            # Values starting with capital letters are better
+            if value_str and value_str[0].isupper():
+                score *= 1.1
+            # Values that are all uppercase or all lowercase are suspicious
+            if value_str.isupper() or (value_str.islower() and len(value_str) > 3):
+                score *= 0.8
+        
+        return min(score, 1.0)  # Cap at 1.0
 
 
 def resolve_conflict(

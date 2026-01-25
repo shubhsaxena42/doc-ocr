@@ -120,7 +120,7 @@ class ModelConfig:
     # SLM (Tier 2)
     slm_model_name: str = "Qwen/Qwen2.5-Coder-1.5B-Instruct"
     slm_quantization: str = "4bit"  # NF4 via bitsandbytes
-    slm_max_context_chars: int = 200
+    slm_max_context_chars: int = 2000
     
     # VLM (Tier 3)
     vlm_model_name: str = "Qwen/Qwen2.5-VL-7B-Instruct"
