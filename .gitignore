@@ -2,3 +2,6 @@ train/
 logs/
 pipeline_run_20260122_185026.log
 visualizer.py
+results_with_sources.json
+results_with_sources copy.json
+.gitignore

@@ -1,14 +1,15 @@
 """
 VLM Judge Module
 
-Qwen2.5-VL-7B integration for Tier 3 visual adjudication.
+Qwen3-VL-8B integration for Tier 3 visual adjudication.
 Uses 8-bit quantization for accurate inference on document images.
 
 Key Design Principles:
-1. VERIFICATION over EXTRACTION: Ask VLM to choose between OCR values, not re-extract
+1. EXTRACTION with REASONING: Ask VLM to extract fields with JSON output
 2. LABEL ANCHORING: Always instruct VLM to find the label first, then read the value
-3. HIGH RESOLUTION: Preserve document detail with minimal downsampling
-4. FULL IMAGE CONTEXT: VLM always sees the full document, not just crops
+3. HIGH RESOLUTION: Preserve document detail with minimal downsampling (2048px)
+4. FULL IMAGE CONTEXT: VLM always sees the full document for better accuracy
+5. INFERENCE for UNCLEAR: When image quality is poor, use reasoning to infer values
 """
 
 import time
@@ -43,11 +44,11 @@ class VLMJudge:
     """
     Vision Language Model judge for Tier 3 adjudication.
     
-    Uses Qwen2.5-VL-7B with 8-bit quantization for accuracy.
-    Analyzes FULL document images to verify OCR extractions.
+    Uses Qwen3-VL-8B with 8-bit quantization for accuracy.
+    Analyzes FULL document images to extract and verify fields.
     
-    KEY IMPROVEMENT: Uses VERIFICATION mode instead of EXTRACTION mode.
-    Instead of asking "What is the value?", we ask "Which of these is correct?"
+    KEY IMPROVEMENT: Uses intelligent EXTRACTION with REASONING.
+    Asks VLM to extract fields in JSON format, inferring unclear values.
     """
     
     # VERIFICATION prompts with label anchoring (Issue #2, #6 fixes)
@@ -190,10 +191,10 @@ Which is correct? Respond with just the correct text."""
     
     def __init__(
         self,
-        model_name: str = "Qwen/Qwen2.5-VL-7B-Instruct",
+        model_name: str = "Qwen/Qwen3-VL-8B",  # Best visual reasoning for documents
         crop_size: Tuple[int, int] = None,
         use_quantization: bool = True,
-        quantization_bits: int = 8  # Changed from 4-bit to 8-bit (Issue #5 fix)
+        quantization_bits: int = 8  # 8-bit for accuracy; use 4 for memory constrained
     ):
         """
         Initialize VLM judge.
@@ -214,44 +215,52 @@ Which is correct? Respond with just the correct text."""
         self._invocation_count = 0
     
     def _lazy_init(self):
-        """Lazy initialization of model."""
+        """Lazy initialization of model optimized for Kaggle T4 GPU."""
         if self._initialized:
             return
         
+        print(f"🔄 Loading VLM model: {self.model_name}...")
+        
         try:
-            # Use AutoModelForCausalLM with trust_remote_code for Qwen 2.5 VL
-            # This works with all transformers versions
             from transformers import AutoProcessor, AutoModelForCausalLM
             import torch
             
-            # Configure quantization
+            # Check for bfloat16 support (T4 supports it)
+            use_bf16 = torch.cuda.is_available() and torch.cuda.is_bf16_supported()
+            compute_dtype = torch.bfloat16 if use_bf16 else torch.float16
+            print(f"  Using compute dtype: {compute_dtype}")
+            
+            # Configure model loading for Kaggle
             model_kwargs = {
-                "torch_dtype": torch.float16,
+                "torch_dtype": compute_dtype,
                 "device_map": "auto",
-                "trust_remote_code": True  # Required for Qwen models
+                "trust_remote_code": True,  # Required for Qwen models
+                "low_cpu_mem_usage": True   # Reduces peak memory during loading
             }
             
             if self.use_quantization:
                 try:
                     from transformers import BitsAndBytesConfig
                     
-                    # Use 8-bit quantization for better accuracy (Issue #5 fix)
-                    # 4-bit degrades fine-grained character recognition too much
+                    # 8-bit quantization for accuracy (fits in T4's 16GB)
+                    # 4-bit available for memory-constrained scenarios
                     if self.quantization_bits == 4:
                         quantization_config = BitsAndBytesConfig(
                             load_in_4bit=True,
-                            bnb_4bit_compute_dtype=torch.float16,
+                            bnb_4bit_compute_dtype=compute_dtype,
                             bnb_4bit_use_double_quant=True,
                             bnb_4bit_quant_type="nf4"
                         )
+                        print("  Using 4-bit NF4 quantization")
                     else:  # Default to 8-bit for accuracy
                         quantization_config = BitsAndBytesConfig(
                             load_in_8bit=True,
                             llm_int8_threshold=6.0
                         )
+                        print("  Using 8-bit INT8 quantization")
                     model_kwargs["quantization_config"] = quantization_config
                 except ImportError:
-                    print("bitsandbytes not available, using float16")
+                    print("  Warning: bitsandbytes not available, using native dtype")
             
             self.processor = AutoProcessor.from_pretrained(
                 self.model_name,
@@ -262,13 +271,15 @@ Which is correct? Respond with just the correct text."""
                 **model_kwargs
             )
             
+            print("✓ VLM model loaded successfully!")
             self._initialized = True
             
         except Exception as e:
-            print(f"VLM initialization error: {e}")
+            print(f"❌ VLM initialization error: {e}")
             print("Possible solutions:")
-            print("1. Install qwen-vl-utils: pip install qwen-vl-utils")
-            print("2. Upgrade transformers: pip install --upgrade transformers")
+            print("  1. pip install qwen-vl-utils")
+            print("  2. pip install --upgrade transformers accelerate")
+            print("  3. Check if model name is correct on HuggingFace")
             self._initialized = True  # Prevent repeated attempts
     
     @property
@@ -828,44 +839,34 @@ REASON: [brief explanation]"""
             if pil_image.size[0] > max_size or pil_image.size[1] > max_size:
                 pil_image.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
             
-            # Comprehensive extraction prompt WITH LABEL ANCHORING (Issue #6 fix)
-            extraction_prompt = """You are an expert document AI extracting information from a tractor/vehicle invoice.
+            # JSON-based extraction prompt with reasoning for unclear values (Qwen3-VL optimized)
+            extraction_prompt = \"\"\"You are an expert document AI extracting information from a tractor/vehicle invoice.
 
-IMPORTANT: For each field, FIRST find the LABEL on the document, THEN read the VALUE next to it.
+Extract the following fields in JSON format. For each field:
+1. FIRST find the LABEL on the document, THEN read the VALUE next to it
+2. If a value is unclear due to image quality, use your reasoning to infer the most likely value based on the rest of the document
+3. If you cannot determine a value at all, use null
 
 FIELDS TO EXTRACT:
+- dealer_name: The company/dealer name (look for letterhead, "Dealer:", "Seller:", "From:")
+- model_name: Tractor brand + model (e.g., "Mahindra 575 DI", "Massey Ferguson 1035")
+  Common brands: Mahindra, Massey Ferguson, John Deere, New Holland, Eicher, Kubota, Swaraj, Sonalika, Powertrac, TAFE
+- horse_power: The HP value as a number (look for "HP", "H.P.", typical range 20-100)
+- asset_cost: Total price in rupees as a number (look for "Total", "Grand Total", range 300000-1500000)
+- signature: Is there a handwritten signature? (true/false)
+- stamp: Is there an official stamp/seal? (true/false)
 
-1. DEALER_NAME
-   - FIND LABEL: "Dealer", "Seller", "From", or company letterhead at top
-   - READ VALUE: The company/dealer name next to or below the label
-
-2. MODEL_NAME
-   - FIND LABEL: "Model", "Tractor Model", "Vehicle", or in product description
-   - READ VALUE: Brand + model number (e.g., "Mahindra 575 DI", "Massey Ferguson 1035")
-   - Look for brands: Mahindra, Massey Ferguson, John Deere, New Holland, Eicher, Kubota, Swaraj, Sonalika, Powertrac
-
-3. HORSE_POWER
-   - FIND LABEL: "HP", "Horse Power", "H.P.", "H/P"
-   - READ VALUE: The number next to that label (typical range: 20-100 HP)
-
-4. ASSET_COST
-   - FIND LABEL: "Total", "Grand Total", "Amount", "Price"
-   - READ VALUE: The rupee amount (typical range: Rs. 3-15 lakh)
-
-5. SIGNATURE
-   - LOOK FOR: Handwritten cursive marks near "Customer's Signature" or "Authorized Signatory"
-
-6. STAMP
-   - LOOK FOR: Circular/rectangular colored ink marks (blue, red, purple)
-
-Respond in this EXACT format:
-DEALER_NAME: [value or NOT_FOUND]
-MODEL_NAME: [value or NOT_FOUND]
-HORSE_POWER: [number or NOT_FOUND]
-ASSET_COST: [number or NOT_FOUND]
-SIGNATURE: [YES/NO]
-STAMP: [YES/NO]
-CONFIDENCE: [high/medium/low]"""
+Respond with ONLY valid JSON in this exact format:
+{
+  "dealer_name": "value or null",
+  "model_name": "value or null", 
+  "horse_power": number_or_null,
+  "asset_cost": number_or_null,
+  "signature": true_or_false,
+  "stamp": true_or_false,
+  "confidence": "high/medium/low",
+  "reasoning": "brief explanation of any inferred values"
+}\"\"\"
 
             # Prepare conversation format for Qwen2-VL
             messages = [
@@ -935,25 +936,108 @@ CONFIDENCE: [high/medium/low]"""
         fields: List[str],
         latency: float
     ) -> Dict[str, VLMJudgment]:
-        """Parse the all-fields VLM extraction response."""
+        """Parse the all-fields VLM extraction response (JSON or legacy text format)."""
         import re
+        import json
         
         results = {}
+        base_confidence = 0.75  # Default confidence
         
+        # Try JSON parsing first (Qwen3-VL optimized)
+        try:
+            # Extract JSON block if wrapped in markdown
+            json_match = re.search(r'```(?:json)?\\s*(\\{.*?\\})\\s*```', response, re.DOTALL)
+            if json_match:
+                json_str = json_match.group(1)
+            else:
+                # Try to find raw JSON object
+                json_match = re.search(r'\\{[^{}]*"dealer_name"[^{}]*\\}', response, re.DOTALL | re.IGNORECASE)
+                json_str = json_match.group(0) if json_match else None
+            
+            if json_str:
+                parsed = json.loads(json_str)
+                
+                # Get confidence from JSON
+                conf_str = parsed.get("confidence", "medium")
+                if isinstance(conf_str, str):
+                    confidence_map = {"high": 0.90, "medium": 0.75, "low": 0.60}
+                    base_confidence = confidence_map.get(conf_str.lower(), 0.75)
+                
+                reasoning_note = parsed.get("reasoning", "VLM JSON extraction")
+                
+                for field_name in fields:
+                    value = parsed.get(field_name)
+                    
+                    if value is None or value == "null" or value == "":
+                        results[field_name] = VLMJudgment(
+                            resolved_value=None,
+                            confidence=0.0,
+                            status="RESOLVED",
+                            reasoning="VLM could not find field in image",
+                            latency=latency
+                        )
+                    elif field_name in ["signature", "stamp"]:
+                        is_present = value if isinstance(value, bool) else str(value).upper() == "TRUE"
+                        results[field_name] = VLMJudgment(
+                            resolved_value={"present": is_present, "bbox": None, "verified": True},
+                            confidence=base_confidence,
+                            status="RESOLVED",
+                            reasoning=f"VLM extraction: {reasoning_note}",
+                            latency=latency
+                        )
+                    elif field_name == "horse_power":
+                        hp_value = float(value) if isinstance(value, (int, float)) else None
+                        if hp_value is None and isinstance(value, str):
+                            hp_match = re.search(r'(\\d+)', value)
+                            hp_value = float(hp_match.group(1)) if hp_match else None
+                        results[field_name] = VLMJudgment(
+                            resolved_value=hp_value,
+                            confidence=base_confidence,
+                            status="RESOLVED",
+                            reasoning=f"VLM extraction: {reasoning_note}",
+                            latency=latency
+                        )
+                    elif field_name == "asset_cost":
+                        cost_value = float(value) if isinstance(value, (int, float)) else None
+                        if cost_value is None and isinstance(value, str):
+                            cost_clean = re.sub(r'[^\\d.]', '', value)
+                            cost_value = float(cost_clean) if cost_clean else None
+                        results[field_name] = VLMJudgment(
+                            resolved_value=cost_value,
+                            confidence=base_confidence,
+                            status="RESOLVED",
+                            reasoning=f"VLM extraction: {reasoning_note}",
+                            latency=latency
+                        )
+                    else:
+                        results[field_name] = VLMJudgment(
+                            resolved_value=value,
+                            confidence=base_confidence,
+                            status="RESOLVED",
+                            reasoning=f"VLM extraction: {reasoning_note}",
+                            latency=latency
+                        )
+                
+                return results
+                
+        except (json.JSONDecodeError, AttributeError):
+            pass  # Fall through to legacy text parsing
+        
+        # Legacy text format parsing (fallback)
         # Extract confidence level
-        conf_match = re.search(r'CONFIDENCE:\s*(\w+)', response, re.IGNORECASE)
+        conf_match = re.search(r'CONFIDENCE:\\s*(\\w+)', response, re.IGNORECASE)
         confidence_str = conf_match.group(1).lower() if conf_match else "medium"
         confidence_map = {"high": 0.90, "medium": 0.75, "low": 0.60}
         base_confidence = confidence_map.get(confidence_str, 0.75)
         
-        # Field name mapping
+        # Field name mapping for legacy format
         field_patterns = {
-            "dealer_name": r'DEALER_NAME:\s*(.+?)(?:\n|$)',
-            "model_name": r'MODEL_NAME:\s*(.+?)(?:\n|$)',
-            "horse_power": r'HORSE_POWER:\s*(.+?)(?:\n|$)',
-            "asset_cost": r'ASSET_COST:\s*(.+?)(?:\n|$)',
-            "signature": r'SIGNATURE:\s*(.+?)(?:\n|$)',
-            "stamp": r'STAMP:\s*(.+?)(?:\n|$)'
+            "dealer_name": r'DEALER_NAME:\\s*(.+?)(?:\\n|$)',
+            "model_name": r'MODEL_NAME:\\s*(.+?)(?:\\n|$)',
+            "horse_power": r'HORSE_POWER:\\s*(.+?)(?:\\n|$)',
+            "asset_cost": r'ASSET_COST:\\s*(.+?)(?:\\n|$)',
+            "signature": r'SIGNATURE:\\s*(.+?)(?:\\n|$)',
+            "stamp": r'STAMP:\\s*(.+?)(?:\\n|$)'
         }
         
         for field_name in fields:
@@ -993,8 +1077,7 @@ CONFIDENCE: [high/medium/low]"""
                             latency=latency
                         )
                     elif field_name == "horse_power":
-                        # Extract numeric HP value
-                        hp_match = re.search(r'(\d+)', value)
+                        hp_match = re.search(r'(\\d+)', value)
                         hp_value = float(hp_match.group(1)) if hp_match else None
                         results[field_name] = VLMJudgment(
                             resolved_value=hp_value,
@@ -1004,8 +1087,7 @@ CONFIDENCE: [high/medium/low]"""
                             latency=latency
                         )
                     elif field_name == "asset_cost":
-                        # Extract numeric cost value
-                        cost_clean = re.sub(r'[^\d.]', '', value)
+                        cost_clean = re.sub(r'[^\\d.]', '', value)
                         cost_value = float(cost_clean) if cost_clean else None
                         results[field_name] = VLMJudgment(
                             resolved_value=cost_value,

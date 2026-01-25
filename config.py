@@ -123,9 +123,9 @@ class ModelConfig:
     slm_max_context_chars: int = 2048  # Increased for better document accuracy
     
     # VLM (Tier 3)
-    vlm_model_name: str = "Qwen/Qwen2.5-VL-7B-Instruct"
-    vlm_quantization: str = "4bit"  # NF4 via bitsandbytes
-    vlm_crop_size: tuple = (200, 200)
+    vlm_model_name: str = "Qwen/Qwen3-VL-8B"  # Better visual reasoning than Qwen2.5-VL-7B
+    vlm_quantization: str = "8bit"  # Q8_0 equivalent for accuracy (Q4_K_M for memory constrained)
+    vlm_crop_size: tuple = (400, 400)  # Larger crops for small text
 
 
 # ============================================================================
