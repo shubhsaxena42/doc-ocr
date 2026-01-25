@@ -122,8 +122,8 @@ class ModelConfig:
     slm_quantization: str = "4bit"  # NF4 via bitsandbytes (T4 compatible)
     slm_max_context_chars: int = 2048  # Increased for better document accuracy
     
-    # VLM (Tier 3) - Use Qwen2-VL-7B (verified to exist on HuggingFace)
-    vlm_model_name: str = "Qwen/Qwen2-VL-7B-Instruct"  # T4 compatible with 4-bit
+    # VLM (Tier 3) - Use Qwen2.5-VL-7B (latest version)
+    vlm_model_name: str = "Qwen/Qwen2.5-VL-7B-Instruct"  # T4 compatible with 4-bit
     vlm_quantization: str = "4bit"  # 4-bit to fit in T4's 16GB VRAM
     vlm_crop_size: tuple = (400, 400)  # Larger crops for small text
 

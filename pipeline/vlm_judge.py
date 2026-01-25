@@ -191,7 +191,7 @@ Which is correct? Respond with just the correct text."""
     
     def __init__(
         self,
-        model_name: str = "Qwen/Qwen2-VL-7B-Instruct",  # T4 compatible VLM
+        model_name: str = "Qwen/Qwen2.5-VL-7B-Instruct",  # Qwen2.5-VL for T4
         crop_size: Tuple[int, int] = None,
         use_quantization: bool = True,
         quantization_bits: int = 4  # 4-bit for T4's 16GB VRAM
@@ -222,7 +222,6 @@ Which is correct? Respond with just the correct text."""
         print(f"🔄 Loading VLM model: {self.model_name}...")
         
         try:
-            from transformers import AutoProcessor, AutoModelForCausalLM
             import torch
             
             # Check for bfloat16 support (T4 supports it)
@@ -230,20 +229,34 @@ Which is correct? Respond with just the correct text."""
             compute_dtype = torch.bfloat16 if use_bf16 else torch.float16
             print(f"  Using compute dtype: {compute_dtype}")
             
+            # Qwen VL models require special model classes
+            model_name_lower = self.model_name.lower()
+            if "qwen2.5-vl" in model_name_lower or "qwen2_5_vl" in model_name_lower:
+                from transformers import Qwen2_5_VLForConditionalGeneration, AutoProcessor
+                model_class = Qwen2_5_VLForConditionalGeneration
+                print("  Using Qwen2_5_VLForConditionalGeneration")
+            elif "qwen2-vl" in model_name_lower or "qwen2_vl" in model_name_lower:
+                from transformers import Qwen2VLForConditionalGeneration, AutoProcessor
+                model_class = Qwen2VLForConditionalGeneration
+                print("  Using Qwen2VLForConditionalGeneration")
+            else:
+                from transformers import AutoModelForCausalLM as model_class, AutoProcessor
+                print("  Using AutoModelForCausalLM")
+            
+            from transformers import AutoProcessor
+            
             # Configure model loading for Kaggle
             model_kwargs = {
                 "torch_dtype": compute_dtype,
                 "device_map": "auto",
-                "trust_remote_code": True,  # Required for Qwen models
-                "low_cpu_mem_usage": True   # Reduces peak memory during loading
+                "trust_remote_code": True,
+                "low_cpu_mem_usage": True
             }
             
             if self.use_quantization:
                 try:
                     from transformers import BitsAndBytesConfig
                     
-                    # 8-bit quantization for accuracy (fits in T4's 16GB)
-                    # 4-bit available for memory-constrained scenarios
                     if self.quantization_bits == 4:
                         quantization_config = BitsAndBytesConfig(
                             load_in_4bit=True,
@@ -252,7 +265,7 @@ Which is correct? Respond with just the correct text."""
                             bnb_4bit_quant_type="nf4"
                         )
                         print("  Using 4-bit NF4 quantization")
-                    else:  # Default to 8-bit for accuracy
+                    else:
                         quantization_config = BitsAndBytesConfig(
                             load_in_8bit=True,
                             llm_int8_threshold=6.0
@@ -266,7 +279,7 @@ Which is correct? Respond with just the correct text."""
                 self.model_name,
                 trust_remote_code=True
             )
-            self.model = AutoModelForCausalLM.from_pretrained(
+            self.model = model_class.from_pretrained(
                 self.model_name,
                 **model_kwargs
             )
