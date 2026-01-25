@@ -22,6 +22,9 @@ os.environ['FLAGS_enable_pir_executor'] = '0'
 # CUDA configuration
 os.environ.setdefault('CUDA_VISIBLE_DEVICES', '0')
 
+# HuggingFace tokenizers - disable parallelism to avoid fork warnings
+os.environ['TOKENIZERS_PARALLELISM'] = 'false'
+
 
 class PipelineMode(Enum):
     """Pipeline execution modes."""

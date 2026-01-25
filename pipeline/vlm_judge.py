@@ -852,8 +852,8 @@ REASON: [brief explanation]"""
             if pil_image.size[0] > max_size or pil_image.size[1] > max_size:
                 pil_image.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
             
-            # JSON-based extraction prompt with reasoning for unclear values (Qwen3-VL optimized)
-            extraction_prompt = \"\"\"You are an expert document AI extracting information from a tractor/vehicle invoice.
+            # JSON-based extraction prompt with reasoning for unclear values
+            extraction_prompt = """You are an expert document AI extracting information from a tractor/vehicle invoice.
 
 Extract the following fields in JSON format. For each field:
 1. FIRST find the LABEL on the document, THEN read the VALUE next to it
@@ -879,7 +879,7 @@ Respond with ONLY valid JSON in this exact format:
   "stamp": true_or_false,
   "confidence": "high/medium/low",
   "reasoning": "brief explanation of any inferred values"
-}\"\"\"
+}"""
 
             # Prepare conversation format for Qwen2-VL
             messages = [
