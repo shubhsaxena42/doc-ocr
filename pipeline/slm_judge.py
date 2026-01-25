@@ -112,18 +112,18 @@ Respond with ONLY a JSON object (no other text):
 
     def __init__(
         self,
-        model_name: str = "meta-llama/Llama-3.2-3B-Instruct",  # Changed from Qwen-Coder to Llama for better docs
-        max_context_chars: int = 1500,  # Increased from 200 per critique recommendation
+        model_name: str = "Qwen/Qwen3-4B-Instruct-2507-FP8",  # Un-gated FP8 model
+        max_context_chars: int = 2048,  # Increased for document processing
         use_quantization: bool = True
     ):
         """
         Initialize SLM judge.
         
         Args:
-            model_name: HuggingFace model name. Llama-3.2-3B-Instruct recommended for documents.
+            model_name: HuggingFace model name. Qwen3-4B-FP8 recommended (un-gated, efficient).
                        Alternatives: "Qwen/Qwen2.5-1.5B-Instruct", "microsoft/phi-2"
-            max_context_chars: Maximum context window size (1500 recommended for invoices)
-            use_quantization: Whether to use 4-bit quantization
+            max_context_chars: Maximum context window size (2048 recommended for invoices)
+            use_quantization: Whether to use quantization (ignored for FP8 models)
         """
         self.model_name = model_name
         self.max_context_chars = max_context_chars
@@ -134,7 +134,7 @@ Respond with ONLY a JSON object (no other text):
         self._init_error = None  # Track initialization errors
     
     def _lazy_init(self):
-        """Lazy initialization of model with explicit error tracking."""
+        """Lazy initialization of model with FP8 support for Qwen3-4B."""
         if self._initialized:
             return
         
@@ -144,26 +144,37 @@ Respond with ONLY a JSON object (no other text):
             from transformers import AutoModelForCausalLM, AutoTokenizer
             import torch
             
-            # Configure quantization
+            # Check for bfloat16 support (better precision, supported on T4 and newer GPUs)
+            use_bf16 = torch.cuda.is_available() and torch.cuda.is_bf16_supported()
+            compute_dtype = torch.bfloat16 if use_bf16 else torch.float16
+            
+            # Configure model loading based on quantization type
             model_kwargs = {
-                "torch_dtype": torch.float16,
+                "torch_dtype": compute_dtype,
                 "device_map": "auto",
                 "trust_remote_code": True
             }
             
-            if self.use_quantization:
+            # FP8 models are pre-quantized - load directly without BitsAndBytesConfig
+            # 4-bit/8-bit models need bitsandbytes quantization
+            is_fp8_model = "FP8" in self.model_name.upper() or "fp8" in self.model_name.lower()
+            
+            if self.use_quantization and not is_fp8_model:
                 try:
                     from transformers import BitsAndBytesConfig
                     
                     quantization_config = BitsAndBytesConfig(
                         load_in_4bit=True,
-                        bnb_4bit_compute_dtype=torch.float16,
+                        bnb_4bit_compute_dtype=compute_dtype,
                         bnb_4bit_use_double_quant=True,
                         bnb_4bit_quant_type="nf4"
                     )
                     model_kwargs["quantization_config"] = quantization_config
+                    print(f"  Using 4-bit NF4 quantization with {compute_dtype}")
                 except ImportError:
-                    print("Warning: bitsandbytes not available, using float16")
+                    print("  Warning: bitsandbytes not available, using native dtype")
+            else:
+                print(f"  Using native {compute_dtype} (FP8 pre-quantized model)")
             
             self.tokenizer = AutoTokenizer.from_pretrained(
                 self.model_name, 

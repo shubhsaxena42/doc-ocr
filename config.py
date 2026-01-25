@@ -118,9 +118,9 @@ class ModelConfig:
     yolo_iou_threshold: float = 0.45
     
     # SLM (Tier 2)
-    slm_model_name: str = "Qwen/Qwen2.5-Coder-1.5B-Instruct"
-    slm_quantization: str = "4bit"  # NF4 via bitsandbytes
-    slm_max_context_chars: int = 2000
+    slm_model_name: str = "Qwen/Qwen3-4B-Instruct-2507-FP8"  # Un-gated FP8 model
+    slm_quantization: str = "fp8"  # Native FP8, no bitsandbytes needed
+    slm_max_context_chars: int = 2048  # Increased for better document accuracy
     
     # VLM (Tier 3)
     vlm_model_name: str = "Qwen/Qwen2.5-VL-7B-Instruct"

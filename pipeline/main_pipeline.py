@@ -556,8 +556,8 @@ class DocumentProcessor:
             # === FALLBACK: Use best available value ===
             # Never return None - use quality-based selection
             fallback_value, fallback_conf = self._quality_fallback(
-                conflict.value1, conflict.conf1,
-                conflict.value2, conflict.conf2,
+                conflict.value1, conflict.confidence1,
+                conflict.value2, conflict.confidence2,
                 field_name
             )
             resolved[field_name] = FieldExtraction(
