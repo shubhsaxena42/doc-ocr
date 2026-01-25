@@ -191,10 +191,10 @@ Which is correct? Respond with just the correct text."""
     
     def __init__(
         self,
-        model_name: str = "Qwen/Qwen3-VL-8B",  # Best visual reasoning for documents
+        model_name: str = "Qwen/Qwen2-VL-7B-Instruct",  # T4 compatible VLM
         crop_size: Tuple[int, int] = None,
         use_quantization: bool = True,
-        quantization_bits: int = 8  # 8-bit for accuracy; use 4 for memory constrained
+        quantization_bits: int = 4  # 4-bit for T4's 16GB VRAM
     ):
         """
         Initialize VLM judge.

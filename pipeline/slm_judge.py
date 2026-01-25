@@ -112,7 +112,7 @@ Respond with ONLY a JSON object (no other text):
 
     def __init__(
         self,
-        model_name: str = "Qwen/Qwen3-4B-Instruct-2507-FP8",  # Un-gated FP8 model
+        model_name: str = "Qwen/Qwen2.5-3B-Instruct",  # T4 compatible with 4-bit
         max_context_chars: int = 2048,  # Increased for document processing
         use_quantization: bool = True
     ):

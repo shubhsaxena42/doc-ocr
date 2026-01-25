@@ -117,14 +117,14 @@ class ModelConfig:
     yolo_confidence_threshold: float = 0.5
     yolo_iou_threshold: float = 0.45
     
-    # SLM (Tier 2)
-    slm_model_name: str = "Qwen/Qwen3-4B-Instruct-2507-FP8"  # Un-gated FP8 model
-    slm_quantization: str = "fp8"  # Native FP8, no bitsandbytes needed
+    # SLM (Tier 2) - Use Qwen2.5-3B with 4-bit quantization (T4 compatible)
+    slm_model_name: str = "Qwen/Qwen2.5-3B-Instruct"  # Works on T4 with 4-bit
+    slm_quantization: str = "4bit"  # NF4 via bitsandbytes (T4 compatible)
     slm_max_context_chars: int = 2048  # Increased for better document accuracy
     
-    # VLM (Tier 3)
-    vlm_model_name: str = "Qwen/Qwen3-VL-8B"  # Better visual reasoning than Qwen2.5-VL-7B
-    vlm_quantization: str = "8bit"  # Q8_0 equivalent for accuracy (Q4_K_M for memory constrained)
+    # VLM (Tier 3) - Use Qwen2-VL-7B (verified to exist on HuggingFace)
+    vlm_model_name: str = "Qwen/Qwen2-VL-7B-Instruct"  # T4 compatible with 4-bit
+    vlm_quantization: str = "4bit"  # 4-bit to fit in T4's 16GB VRAM
     vlm_crop_size: tuple = (400, 400)  # Larger crops for small text
 
 
