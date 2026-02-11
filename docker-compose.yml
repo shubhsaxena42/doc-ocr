@@ -1,65 +1,147 @@
 version: '3.8'
 
+# ===========================================================================
+# IDAI Pipeline — Microservice Architecture
+#
+# Three isolated services:
+#   1. paddle-ocr   → PaddleOCR  (transformers 4.37.x)
+#   2. deepseek-ocr → DeepSeek   (transformers 4.40.x)
+#   3. pipeline      → Main app   (no OCR deps, calls services via HTTP)
+#
+# Shared volume "ocr-images" lets the pipeline pass images to OCR services.
+# ===========================================================================
+
 services:
-  idai-pipeline:
+
+  # ───────────────────────────────────────────────────────────────────────
+  # PaddleOCR Service
+  # ───────────────────────────────────────────────────────────────────────
+  paddle-ocr:
+    build:
+      context: ./services/paddle_ocr
+      dockerfile: Dockerfile
+    image: idai-paddle-ocr:latest
+    container_name: idai-paddle-ocr
+    ports:
+      - "5001:5001"
+    environment:
+      - FLAGS_use_mkldnn=0
+      - FLAGS_enable_pir_executor=0
+    volumes:
+      - shared-images:/shared
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+        reservations:
+          memory: 2G
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:5001/health" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    restart: unless-stopped
+
+  # ───────────────────────────────────────────────────────────────────────
+  # DeepSeek-OCR Service
+  # ───────────────────────────────────────────────────────────────────────
+  deepseek-ocr:
+    build:
+      context: ./services/deepseek_ocr
+      dockerfile: Dockerfile
+    image: idai-deepseek-ocr:latest
+    container_name: idai-deepseek-ocr
+    ports:
+      - "5002:5002"
+    environment:
+      - CUDA_VISIBLE_DEVICES=0
+    volumes:
+      - shared-images:/shared
+    deploy:
+      resources:
+        limits:
+          memory: 16G
+        reservations:
+          memory: 8G
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [ gpu ]
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:5002/health" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+    restart: unless-stopped
+
+  # ───────────────────────────────────────────────────────────────────────
+  # Main Pipeline (orchestrator)
+  # ───────────────────────────────────────────────────────────────────────
+  pipeline:
     build:
       context: .
       dockerfile: Dockerfile
     image: idai-pipeline:latest
     container_name: idai-pipeline
-
-    # Mount volumes for data
+    depends_on:
+      paddle-ocr:
+        condition: service_healthy
+      deepseek-ocr:
+        condition: service_healthy
+    environment:
+      - PADDLE_OCR_URL=http://paddle-ocr:5001
+      - DEEPSEEK_OCR_URL=http://deepseek-ocr:5002
+      - CUDA_VISIBLE_DEVICES=0
     volumes:
       - ./data:/app/data
       - ./train:/app/train
       - ./output:/app/output
       - ./models:/app/models
-
-    # Environment variables
-    environment:
-      - FLAGS_use_mkldnn=0
-      - FLAGS_enable_pir_executor=0
-      - CUDA_VISIBLE_DEVICES=0
-
-    # Resource limits
+      - shared-images:/shared
     deploy:
       resources:
         limits:
           memory: 8G
         reservations:
           memory: 4G
-
-    # Default command
     command: [ "--input", "/app/train", "--output", "/app/output/results.json", "--mode", "full" ]
 
-  # Annotation service
+  # ───────────────────────────────────────────────────────────────────────
+  # Annotation Tool (optional)
+  # ───────────────────────────────────────────────────────────────────────
   annotator:
     build:
       context: .
       dockerfile: Dockerfile
     image: idai-pipeline:latest
     container_name: idai-annotator
-
     volumes:
       - ./data:/app/data
       - ./train:/app/train
-
     ports:
       - "8501:8501"
-
     entrypoint: [ "streamlit", "run", "tools/annotator.py", "--server.port=8501", "--server.address=0.0.0.0" ]
-
     profiles:
       - annotate
 
-# Usage:
-#
-# Run pipeline:
-#   docker-compose up idai-pipeline
-#
-# Run with custom arguments:
-#   docker-compose run idai-pipeline --input /app/train --output /app/output/results.json --mode cpu-lite
-#
-# Run annotator:
-#   docker-compose --profile annotate up annotator
-#   Then open http://localhost:8501
+volumes:
+  shared-images:
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # Usage:
+    #
+    #   # Start all services (OCR + pipeline):
+    #   docker compose up --build
+    #
+    #   # Start only OCR services (for local development):
+    #   docker compose up paddle-ocr deepseek-ocr
+    #
+    #   # Run pipeline with custom args:
+    #   docker compose run pipeline --input /app/train --output /app/output/results.json --mode cpu-lite
+    #
+    #   # Run annotator:
+    #   docker compose --profile annotate up annotator
+    #   Then open http://localhost:8501
+    # ═══════════════════════════════════════════════════════════════════════════

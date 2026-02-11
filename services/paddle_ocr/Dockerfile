@@ -1,14 +1,15 @@
-# IDAI Pipeline — Main Orchestrator
-# This container does NOT include PaddleOCR or DeepSeek-OCR.
-# It calls them via HTTP from their isolated service containers.
-
+# PaddleOCR Service
 FROM python:3.10-slim
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    CUDA_VISIBLE_DEVICES=0
+    FLAGS_use_mkldnn=0 \
+    FLAGS_enable_pir_executor=0 \
+    FLAGS_use_mkl=0 \
+    MKLDNN_DISABLE=1 \
+    FLAGS_enable_pir_api=0
 
-# System libraries (OpenCV, etc.)
+# System libraries needed by PaddleOCR / OpenCV
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libgl1-mesa-glx \
     libglib2.0-0 \
@@ -17,7 +18,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxrender-dev \
     libgomp1 \
     libfontconfig1 \
-    curl \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -25,9 +25,9 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY . .
+COPY app.py .
 
-RUN mkdir -p data/synthetic models output
+EXPOSE 5001
 
-ENTRYPOINT ["python", "executable.py"]
-CMD ["--help"]
+# Gunicorn for production; single worker because PaddleOCR is not thread-safe
+CMD ["gunicorn", "--bind", "0.0.0.0:5001", "--workers", "1", "--timeout", "120", "app:app"]

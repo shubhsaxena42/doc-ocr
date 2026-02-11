@@ -64,6 +64,7 @@ Examples:
         default=None,
         help='Path to JSON file with dealer master list'
     )
+
     
     parser.add_argument(
         '--verbose', '-v',
@@ -117,7 +118,7 @@ def main():
     processor = create_processor(
         mode=args.mode,
         golden_set_path=None,  # No golden set calibration
-        dealer_list_path=args.dealer_list
+        dealer_list_path=args.dealer_list,
     )
     
     # Process input

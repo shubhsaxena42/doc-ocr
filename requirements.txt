@@ -1,15 +1,15 @@
-# IDAI Pipeline - Tractor Loan Invoice Extraction
-# Requirements for Google Colab / Production
+# IDAI Pipeline — Main Orchestrator Requirements
+# NOTE: PaddleOCR and DeepSeek-OCR are NOT listed here.
+# They run in isolated microservice containers with their own deps.
 
-# OCR Engines
-paddleocr==2.7.3
-paddlepaddle==2.5.2
+# HTTP client (calls OCR microservices)
+requests>=2.31.0
 
 # Object Detection
 ultralytics==8.2.0
 onnxruntime==1.17.0
 
-# LLM/VLM Integration
+# LLM/VLM Integration (SLM + VLM judges only)
 transformers==4.40.2
 bitsandbytes==0.43.1
 accelerate==0.29.3

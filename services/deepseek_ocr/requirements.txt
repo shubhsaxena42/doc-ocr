@@ -1,0 +1,12 @@
+# DeepSeek-OCR Service - Isolated dependencies
+# Uses transformers 4.40+ (required by DeepSeek model)
+transformers==4.40.2
+bitsandbytes==0.43.1
+accelerate==0.29.3
+torch>=2.0.0
+flask==3.0.3
+gunicorn==22.0.0
+Pillow>=9.0.0
+numpy>=1.21.0
+opencv-python-headless==4.9.0.80
+safetensors>=0.4.0

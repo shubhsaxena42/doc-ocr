@@ -1,35 +1,45 @@
 """
-OCR Engines Module
+OCR Engines Module — Microservice Client
 
-Parallel execution of PaddleOCR and DeepSeek-OCR for ensemble extraction.
-Computes per-field confidence scores: OCR confidence × parser certainty.
+Calls PaddleOCR and DeepSeek-OCR through isolated HTTP microservices.
+Each service runs in its own Docker container with its own transformers
+version, eliminating dependency conflicts completely.
+
+The main pipeline imports this module exactly as before — the public API
+(parallel_ocr, run_paddle_ocr, run_deepseek_ocr, OCREngineOutput, etc.)
+is unchanged.
+
+Service URLs are read from config.py (or environment variables).
 """
-import os
-# These flags from the notebook are critical for Colab stability
-os.environ["FLAGS_use_mkldnn"] = "0"
-os.environ["FLAGS_enable_pir_executor"] = "0"
-os.environ["FLAGS_use_mkl"] = "0"
-os.environ["MKLDNN_DISABLE"] = "1"
-os.environ["FLAGS_enable_pir_api"] = "0"
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
+import os
 import time
-import re
-import sys
-import io
-import tempfile
+import json
+import logging
 from pathlib import Path
 from dataclasses import dataclass, field
 from typing import List, Dict, Tuple, Optional, Any
 from concurrent.futures import ThreadPoolExecutor, as_completed
+
 import numpy as np
-from PIL import Image
-import cv2
+import requests
 
-# Lazy imports for OCR engines
-_paddle_ocr = None
-_deepseek_model = None
+logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# Service URLs — read from environment so Docker Compose can inject them.
+# Defaults point to localhost for local-dev (running services manually).
+# ---------------------------------------------------------------------------
+PADDLE_OCR_URL = os.environ.get("PADDLE_OCR_URL", "http://localhost:5001")
+DEEPSEEK_OCR_URL = os.environ.get("DEEPSEEK_OCR_URL", "http://localhost:5002")
+
+# HTTP timeout for OCR calls (seconds)
+OCR_TIMEOUT = int(os.environ.get("OCR_TIMEOUT", "120"))
+
+
+# ===========================================================================
+# Data classes (unchanged public API)
+# ===========================================================================
 
 @dataclass
 class BoundingBox:
@@ -38,7 +48,7 @@ class BoundingBox:
     y: int
     width: int
     height: int
-    
+
     @classmethod
     def from_points(cls, points: List[List[float]]) -> 'BoundingBox':
         """Create from list of corner points [[x1,y1], [x2,y2], [x3,y3], [x4,y4]]."""
@@ -49,11 +59,11 @@ class BoundingBox:
         width = int(max(xs) - x)
         height = int(max(ys) - y)
         return cls(x=x, y=y, width=width, height=height)
-    
+
     def to_list(self) -> List[int]:
         """Convert to [x, y, width, height] format."""
         return [self.x, self.y, self.width, self.height]
-    
+
     def to_xyxy(self) -> List[int]:
         """Convert to [x1, y1, x2, y2] format."""
         return [self.x, self.y, self.x + self.width, self.y + self.height]
@@ -67,14 +77,14 @@ class OCRResult:
     confidence: float
     language: Optional[str] = None
     metadata: Dict = field(default_factory=dict)
-    
+
     def to_dict(self) -> Dict:
         return {
             "text": self.text,
             "bbox": self.bbox.to_list(),
             "confidence": self.confidence,
             "language": self.language,
-            "metadata": self.metadata
+            "metadata": self.metadata,
         }
 
 
@@ -86,593 +96,257 @@ class OCREngineOutput:
     latency: float
     full_text: str = ""
     avg_confidence: float = 0.0
-    
+
     def __post_init__(self):
         if self.results:
             self.full_text = " ".join(r.text for r in self.results)
-            self.avg_confidence = np.mean([r.confidence for r in self.results])
-    
+            self.avg_confidence = float(np.mean([r.confidence for r in self.results]))
+
     def to_dict(self) -> Dict:
         return {
             "engine": self.engine,
             "results": [r.to_dict() for r in self.results],
             "latency": self.latency,
             "full_text": self.full_text,
-            "avg_confidence": self.avg_confidence
+            "avg_confidence": self.avg_confidence,
         }
 
 
-def _get_paddle_ocr():
-    """Lazy load PaddleOCR with fallback logic."""
-    global _paddle_ocr
-    if _paddle_ocr is None:
-        try:
-            from paddleocr import PaddleOCR
-            import torch
-            
-            # Determine if we should attempt GPU based on system availability
-            has_gpu = torch.cuda.is_available()
-            
-            try:
-                # Use the exact parameters from the working notebook
-                _paddle_ocr = PaddleOCR(
-                    use_angle_cls=True,
-                    use_textline_orientation=True,  # Matches notebook
-                    lang='en',
-                    use_gpu=has_gpu,
-                    show_log=False,
-                    enable_mkldnn=False  # Matches notebook - prevents MKLDNN conflicts
-                )
-            except Exception as e:
-                print(f"GPU initialization failed: {e}. Falling back to CPU.")
-                # Fallback to CPU to prevent the SIGABRT crash
-                _paddle_ocr = PaddleOCR(
-                    use_angle_cls=True,
-                    use_textline_orientation=True,
-                    lang='en',
-                    use_gpu=False,
-                    show_log=False,
-                    enable_mkldnn=False
-                )
-        except ImportError:
-            print("Warning: PaddleOCR not installed. Install with: pip install paddleocr")
-            _paddle_ocr = None
-    return _paddle_ocr
+# ===========================================================================
+# HTTP Client helpers
+# ===========================================================================
 
-
-def _get_deepseek_model():
-    """Lazy load DeepSeek-OCR model (quantized for efficiency)."""
-    global _deepseek_model
-    if _deepseek_model is None:
-        try:
-            # DeepSeek-OCR implementation
-            # For production, this would load the actual DeepSeek model
-            # Here we provide a placeholder that can be swapped with actual implementation
-            _deepseek_model = DeepSeekOCRWrapper()
-        except Exception as e:
-            print(f"Warning: DeepSeek-OCR initialization failed: {e}")
-            _deepseek_model = None
-    return _deepseek_model
-
-
-class DeepSeekOCRWrapper:
+def _call_ocr_service(
+    service_url: str,
+    image_path: str,
+    engine_name: str,
+) -> OCREngineOutput:
     """
-    Wrapper for DeepSeek-OCR model.
-    
-    In production, this would load the actual DeepSeek model.
-    For now, it provides a compatible interface that can run
-    alongside PaddleOCR for ensemble extraction.
-    
-    When the real model fails to load, it uses MOCK MODE to return
-    conflicting values for testing the multi-tier adjudication system.
+    POST the image file to an OCR microservice and parse the response
+    into an OCREngineOutput.
+
+    Args:
+        service_url: Base URL of the service (e.g. http://paddle-ocr:5001)
+        image_path:  Local path to the image file
+        engine_name: "paddle" or "deepseek"
+
+    Returns:
+        OCREngineOutput
     """
-    
-    def __init__(self, use_mock: bool = True):
-        """Initialize DeepSeek-OCR wrapper."""
-        self.model = None
-        self.processor = None
-        self._initialized = False
-        self._use_mock = use_mock  # Enable mock mode when real model fails
-        self._mock_active = False  # Track if we're in mock mode
-        
-    def _lazy_init(self):
-        """Lazy initialization of DeepSeek-OCR 4-bit model."""
-        if self._initialized:
-            return
-            
-        try:
-            from transformers import AutoTokenizer, AutoModel
-            import torch
-            
-            model_id = 'Jalea96/DeepSeek-OCR-bnb-4bit-NF4'
-            print(f"🔄 Loading DeepSeek-OCR (4-bit): {model_id}...")
-            
-            self.tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
-            self.model = AutoModel.from_pretrained(
-                model_id,
-                _attn_implementation='eager',
-                trust_remote_code=True,
-                use_safetensors=True,
-                device_map="auto",
-                torch_dtype=torch.bfloat16
+    start = time.time()
+
+    try:
+        url = f"{service_url.rstrip('/')}/ocr"
+        filename = Path(image_path).name
+
+        with open(image_path, "rb") as f:
+            resp = requests.post(
+                url,
+                files={"image": (filename, f)},
+                timeout=OCR_TIMEOUT,
             )
-            self.model = self.model.eval()
-            
-            self._initialized = True
-            self._mock_active = False
-            print("✓ DeepSeek-OCR loaded successfully!")
-        except Exception as e:
-            print(f"DeepSeek-OCR initialization error: {e}")
-            if self._use_mock:
-                print("⚠️ Switching to MOCK MODE for testing conflicts")
-                self._mock_active = True
-            self._initialized = True  # Prevent repeated attempts
-    
-    def _generate_mock_values(self, image_path: str) -> Dict[str, Any]:
-        """
-        Generate mock OCR values that differ from PaddleOCR to create conflicts.
-        This enables testing of Tier 2 (SLM) and Tier 3 (VLM) adjudication.
-        
-        The full_text is constructed to include the mock values in a format
-        that the field extractor regex patterns can parse.
-        """
-        import random
-        import hashlib
-        
-        # Use image path hash for consistent but varied mock values
-        path_hash = int(hashlib.md5(image_path.encode()).hexdigest()[:8], 16)
-        random.seed(path_hash)
-        
-        # Mock tractor brands/models that will conflict with real OCR
-        mock_models = [
-            "Mahindra Yuvo 575 DI",
-            "Swaraj 744 FE",
-            "John Deere 5050D",
-            "Eicher 380 Super",
-            "Sonalika DI 750 III",
-            "TAFE 45 DI",
-            "Kubota MU5502",
-            "New Holland 3630",
-            "Massey Ferguson 1035",
-            "Powertrac Euro 50"
-        ]
-        
-        mock_dealers = [
-            "Sharma Tractors Pvt Ltd",
-            "Gupta Agricultural Equipment",
-            "Singh Motor Works",
-            "Patel Farm Machinery",
-            "Verma Implements & Tractors",
-            "Khan Agro Services",
-            "Yadav Krishi Udyog"
-        ]
-        
-        # Generate conflicting values
-        model_name = random.choice(mock_models)
-        dealer_name = random.choice(mock_dealers)
-        horse_power = str(random.randint(35, 75))
-        asset_cost = str(random.randint(500000, 1200000))
-        
-        # Build a realistic-looking invoice text that the field extractor can parse
-        # This ensures the regex patterns in field_parser.py can extract these values
-        full_text = f"""
-        TAX INVOICE / BILL OF SALE
-        
-        Dealer: {dealer_name}
-        Address: 123 Industrial Area, New Delhi 110001
-        
-        PRODUCT DETAILS:
-        Model Name: {model_name}
-        Engine: Diesel Direct Injection
-        HP: {horse_power} HP
-        Horse Power: {horse_power}
-        
-        PRICING:
-        Ex-Showroom Price: Rs. {asset_cost}
-        Total Amount: Rs. {asset_cost}/-
-        
-        Date: 15-01-2024
-        Invoice No: INV/2024/MOCK/{path_hash % 10000:04d}
-        """
-        
-        mock_data = {
-            "model_name": model_name,
-            "dealer_name": dealer_name,
-            "horse_power": horse_power,
-            "asset_cost": asset_cost,
-            "full_text": full_text
-        }
-        
-        print(f"[DeepSeek MOCK] Generated conflicting values - Model: {model_name}, Dealer: {dealer_name}, HP: {horse_power}, Cost: {asset_cost}")
-        
-        return mock_data
-    
-    def ocr(self, image_path: str, mode: str = "gundam") -> List[Dict]:
-        """
-        Run OCR using DeepSeek-OCR 4-bit.
-        
-        Returns list of detections (currently single full-text detection).
-        In mock mode, returns conflicting values for testing adjudication.
-        """
-        self._lazy_init()
-        
-        # If in mock mode, return mock values for testing conflicts
-        if self._mock_active:
-            mock_data = self._generate_mock_values(image_path)
-            
-            # Get image size for bbox
-            try:
-                from PIL import Image
-                img = Image.open(image_path)
-                w, h = img.size
-            except:
-                w, h = 1000, 1000
-            
-            return [{
-                "text": mock_data["full_text"],
-                "bbox": [[0, 0], [w, 0], [w, h], [0, h]],
-                "confidence": 0.85,  # Slightly lower than real OCR
-                "mock_data": mock_data  # Include structured mock data for field extraction
-            }]
-        
-        if self.model is None:
-            return []
-        
-        try:
-            import torch
-            
-            mode_configs = {
-                "tiny":   {"base_size": 512, "image_size": 512, "crop_mode": False},
-                "small":  {"base_size": 640, "image_size": 640, "crop_mode": False},
-                "base":   {"base_size": 1024, "image_size": 1024, "crop_mode": False},
-                "large":  {"base_size": 1280, "image_size": 1280, "crop_mode": False},
-                "gundam": {"base_size": 1024, "image_size": 640, "crop_mode": True},
-            }
-            config = mode_configs.get(mode, mode_configs["gundam"])
-            
-            prompt = "<image>\n<|grounding|>Convert the document to markdown. "
-            temp_dir = os.path.join(tempfile.gettempdir(), "deepseek_ocr_temp")
-            if not os.path.exists(temp_dir):
-                os.makedirs(temp_dir)
-            
-            # Capture stdout because infer() prints result
-            old_stdout = sys.stdout
-            sys.stdout = captured = io.StringIO()
-            
-            try:
-                result = self.model.infer(
-                    self.tokenizer,
-                    prompt=prompt,
-                    image_file=image_path,
-                    output_path=temp_dir,
-                    base_size=config["base_size"],
-                    image_size=config["image_size"],
-                    crop_mode=config["crop_mode"],
-                    save_results=False,
-                    test_compress=True
-                )
-            finally:
-                sys.stdout = old_stdout
-            
-            captured_text = captured.getvalue()
-            final_text = ""
-            
-            # Debug: Print what we captured
-            print(f"[DeepSeek Debug] Captured output length: {len(captured_text)} chars")
-            if captured_text:
-                print(f"[DeepSeek Debug] First 200 chars: {captured_text[:200]}")
-            
-            # Extract text from result or captured stdout
-            if result and isinstance(result, (str, dict)):
-                if isinstance(result, dict) and 'text' in result:
-                    final_text = result['text']
-                    print(f"[DeepSeek Debug] Got text from result dict: {len(final_text)} chars")
-                elif isinstance(result, str) and len(result) > 10:
-                    final_text = result
-                    print(f"[DeepSeek Debug] Got text from result string: {len(final_text)} chars")
-            
-            if not final_text and captured_text:
-                lines = []
-                for line in captured_text.split('\n'):
-                    if 'PATCHES:' in line or 'torch.Size' in line:
-                        continue
-                    line = re.sub(r'<\|ref\|>|<\/ref>|<\|det\|>|<\/det>|<\|grounding\|>', '', line)
-                    line = re.sub(r'\[\[\d+,\s*\d+,\s*\d+,\s*\d+\]\]', '', line)
-                    if line.strip():
-                        lines.append(line.strip())
-                final_text = '\n'.join(lines)
-                print(f"[DeepSeek Debug] Extracted {len(lines)} lines, total {len(final_text)} chars")
-            
-            # Get image size
-            from PIL import Image
-            img = Image.open(image_path)
-            w, h = img.size
-            
-            print(f"[DeepSeek Debug] Final text length: {len(final_text)}")
-            if final_text:
-                print(f"[DeepSeek Debug] Sample: {final_text[:100]}")
-            
-            return [{
-                "text": final_text,
-                "bbox": [[0, 0], [w, 0], [w, h], [0, h]],
-                "confidence": 0.90 if final_text else 0.0
-            }]
-            
-        except Exception as e:
-            print(f"DeepSeek-OCR error: {e}")
-            import traceback
-            traceback.print_exc()
-            return []
 
+        resp.raise_for_status()
+        data = resp.json()
+
+        if not data.get("success", False):
+            logger.warning(
+                "%s service returned error: %s",
+                engine_name,
+                data.get("error", "unknown"),
+            )
+            return OCREngineOutput(
+                engine=engine_name, results=[], latency=time.time() - start
+            )
+
+        # Parse results → OCRResult list
+        results: List[OCRResult] = []
+        for item in data.get("results", []):
+            bbox_points = item.get("bbox_points", [[0, 0], [1, 0], [1, 1], [0, 1]])
+            results.append(
+                OCRResult(
+                    text=item.get("text", ""),
+                    bbox=BoundingBox.from_points(bbox_points),
+                    confidence=float(item.get("confidence", 0.0)),
+                )
+            )
+
+        latency = time.time() - start
+        return OCREngineOutput(
+            engine=engine_name, results=results, latency=latency
+        )
+
+    except requests.exceptions.ConnectionError:
+        logger.error(
+            "Cannot connect to %s service at %s — is it running?",
+            engine_name,
+            service_url,
+        )
+    except requests.exceptions.Timeout:
+        logger.error("%s service timed out after %ds", engine_name, OCR_TIMEOUT)
+    except Exception as e:
+        logger.exception("Error calling %s service: %s", engine_name, e)
+
+    return OCREngineOutput(
+        engine=engine_name, results=[], latency=time.time() - start
+    )
+
+
+# ===========================================================================
+# Public API  (drop-in replacement — same signatures as before)
+# ===========================================================================
 
 def run_paddle_ocr(image_path: str) -> OCREngineOutput:
     """
-    Run PaddleOCR on an image.
-    
+    Run PaddleOCR on an image by calling the PaddleOCR microservice.
+
     Args:
         image_path: Path to the image file
-        
+
     Returns:
         OCREngineOutput with all detected text regions
     """
-    start_time = time.time()
-    results = []
-    
-    ocr = _get_paddle_ocr()
-    if ocr is None:
-        return OCREngineOutput(
-            engine="paddle",
-            results=[],
-            latency=time.time() - start_time
-        )
-    
-    try:
-        # Run PaddleOCR
-        ocr_results = ocr.ocr(image_path, cls=True)
-        
-        if ocr_results and ocr_results[0]:
-            for line in ocr_results[0]:
-                if line and len(line) >= 2:
-                    bbox_points = line[0]
-                    text = line[1][0]
-                    confidence = float(line[1][1])
-                    
-                    results.append(OCRResult(
-                        text=text,
-                        bbox=BoundingBox.from_points(bbox_points),
-                        confidence=confidence
-                    ))
-    except Exception as e:
-        print(f"PaddleOCR error: {e}")
-    
-    latency = time.time() - start_time
-    return OCREngineOutput(
-        engine="paddle",
-        results=results,
-        latency=latency
-    )
+    return _call_ocr_service(PADDLE_OCR_URL, image_path, "paddle")
 
 
 def run_deepseek_ocr(image_path: str) -> OCREngineOutput:
     """
-    Run DeepSeek-OCR on an image.
-    
+    Run DeepSeek-OCR on an image by calling the DeepSeek-OCR microservice.
+
     Args:
         image_path: Path to the image file
-        
+
     Returns:
         OCREngineOutput with all detected text regions
     """
-    start_time = time.time()
-    results = []
-    
-    model = _get_deepseek_model()
-    if model is None:
-        return OCREngineOutput(
-            engine="deepseek",
-            results=[],
-            latency=time.time() - start_time
-        )
-    
-    try:
-        ocr_results = model.ocr(image_path)
-        
-        for detection in ocr_results:
-            results.append(OCRResult(
-                text=detection.get("text", ""),
-                bbox=BoundingBox.from_points(detection.get("bbox", [[0,0],[1,0],[1,1],[0,1]])),
-                confidence=detection.get("confidence", 0.0)
-            ))
-    except Exception as e:
-        print(f"DeepSeek-OCR error: {e}")
-    
-    latency = time.time() - start_time
-    return OCREngineOutput(
-        engine="deepseek",
-        results=results,
-        latency=latency
-    )
+    return _call_ocr_service(DEEPSEEK_OCR_URL, image_path, "deepseek")
 
 
-def parallel_ocr(image_path: str, use_deepseek: bool = True) -> Dict[str, OCREngineOutput]:
+def parallel_ocr(
+    image_path: str, use_deepseek: bool = True
+) -> Dict[str, OCREngineOutput]:
     """
-    Run both OCR engines in parallel using ThreadPoolExecutor.
-    
+    Call both OCR services concurrently using ThreadPoolExecutor.
+
     Args:
-        image_path: Path to the image file
-        use_deepseek: Whether to include DeepSeek-OCR (can be disabled for speed)
-        
+        image_path:   Path to the image file
+        use_deepseek: Whether to include DeepSeek-OCR
+
     Returns:
-        Dictionary with engine names as keys and OCREngineOutput as values
+        Dict mapping engine name → OCREngineOutput
     """
-    outputs = {}
-    
+    outputs: Dict[str, OCREngineOutput] = {}
+
     with ThreadPoolExecutor(max_workers=2) as executor:
         futures = {
-            executor.submit(run_paddle_ocr, image_path): "paddle"
+            executor.submit(run_paddle_ocr, image_path): "paddle",
         }
-        
         if use_deepseek:
             futures[executor.submit(run_deepseek_ocr, image_path)] = "deepseek"
-        
+
         for future in as_completed(futures):
             engine = futures[future]
             try:
-                output = future.result()
-                outputs[engine] = output
+                outputs[engine] = future.result()
             except Exception as e:
-                print(f"Error running {engine} OCR: {e}")
+                logger.exception("Error running %s OCR", engine)
                 outputs[engine] = OCREngineOutput(
-                    engine=engine,
-                    results=[],
-                    latency=0.0
+                    engine=engine, results=[], latency=0.0
                 )
-    
+
     return outputs
 
+
+# ===========================================================================
+# Utility functions (unchanged)
+# ===========================================================================
 
 def merge_ocr_results(
     paddle_output: OCREngineOutput,
     deepseek_output: OCREngineOutput,
-    iou_threshold: float = 0.5
+    iou_threshold: float = 0.5,
 ) -> List[Dict]:
-    """
-    Merge results from both OCR engines, handling overlapping detections.
-    
-    Args:
-        paddle_output: Results from PaddleOCR
-        deepseek_output: Results from DeepSeek-OCR
-        iou_threshold: IoU threshold for considering boxes as overlapping
-        
-    Returns:
-        List of merged results with both engine outputs where applicable
-    """
+    """Merge results from both OCR engines, handling overlapping detections."""
     merged = []
     used_deepseek = set()
-    
+
     for paddle_result in paddle_output.results:
         paddle_bbox = paddle_result.bbox.to_xyxy()
         best_match = None
         best_iou = 0
-        
+
         for i, deepseek_result in enumerate(deepseek_output.results):
             if i in used_deepseek:
                 continue
-                
             deepseek_bbox = deepseek_result.bbox.to_xyxy()
             iou = _calculate_iou(paddle_bbox, deepseek_bbox)
-            
             if iou > best_iou and iou >= iou_threshold:
                 best_iou = iou
                 best_match = (i, deepseek_result)
-        
+
         merged_item = {
             "paddle": paddle_result.to_dict(),
             "deepseek": None,
             "iou": 0.0,
-            "agreement": False
+            "agreement": False,
         }
-        
+
         if best_match:
             used_deepseek.add(best_match[0])
             merged_item["deepseek"] = best_match[1].to_dict()
             merged_item["iou"] = best_iou
-            # Check if texts match (using simple comparison)
             merged_item["agreement"] = _texts_agree(
-                paddle_result.text, 
-                best_match[1].text
+                paddle_result.text, best_match[1].text
             )
-        
+
         merged.append(merged_item)
-    
-    # Add unmatched DeepSeek results
+
     for i, deepseek_result in enumerate(deepseek_output.results):
         if i not in used_deepseek:
             merged.append({
                 "paddle": None,
                 "deepseek": deepseek_result.to_dict(),
                 "iou": 0.0,
-                "agreement": False
+                "agreement": False,
             })
-    
+
     return merged
 
 
 def _calculate_iou(box1: List[int], box2: List[int]) -> float:
-    """Calculate Intersection over Union for two boxes in xyxy format."""
+    """IoU for two boxes in xyxy format."""
     x1 = max(box1[0], box2[0])
     y1 = max(box1[1], box2[1])
     x2 = min(box1[2], box2[2])
     y2 = min(box1[3], box2[3])
-    
     intersection = max(0, x2 - x1) * max(0, y2 - y1)
-    
     area1 = (box1[2] - box1[0]) * (box1[3] - box1[1])
     area2 = (box2[2] - box2[0]) * (box2[3] - box2[1])
-    
     union = area1 + area2 - intersection
-    
-    if union <= 0:
-        return 0.0
-    
-    return intersection / union
+    return intersection / union if union > 0 else 0.0
 
 
 def _texts_agree(text1: str, text2: str, threshold: float = 0.8) -> bool:
     """Check if two texts agree using simple character overlap."""
     if not text1 or not text2:
         return False
-    
-    text1 = text1.lower().strip()
-    text2 = text2.lower().strip()
-    
-    if text1 == text2:
+    t1, t2 = text1.lower().strip(), text2.lower().strip()
+    if t1 == t2:
         return True
-    
-    # Simple character overlap ratio
-    set1 = set(text1)
-    set2 = set(text2)
-    intersection = len(set1 & set2)
-    union = len(set1 | set2)
-    
-    if union == 0:
-        return False
-    
-    return (intersection / union) >= threshold
+    s1, s2 = set(t1), set(t2)
+    union = len(s1 | s2)
+    return (len(s1 & s2) / union) >= threshold if union else False
 
 
 def get_full_text(ocr_outputs: Dict[str, OCREngineOutput]) -> Dict[str, str]:
-    """
-    Extract full text from each OCR engine output.
-    
-    Args:
-        ocr_outputs: Dictionary of engine outputs from parallel_ocr
-        
-    Returns:
-        Dictionary mapping engine names to full extracted text
-    """
-    return {
-        engine: output.full_text 
-        for engine, output in ocr_outputs.items()
-    }
+    """Extract full text from each OCR engine output."""
+    return {engine: output.full_text for engine, output in ocr_outputs.items()}
 
 
 def compute_confidence_score(
     ocr_confidence: float,
     parser_certainty: float,
-    detection_iou: float = 1.0
+    detection_iou: float = 1.0,
 ) -> float:
-    """
-    Compute per-field confidence score.
-    
-    Formula: OCR confidence × detection IoU × parser certainty
-    
-    Args:
-        ocr_confidence: Confidence from OCR engine (0-1)
-        parser_certainty: Certainty from field parser (0-1)
-        detection_iou: IoU with detection bbox if applicable (0-1)
-        
-    Returns:
-        Combined confidence score (0-1)
-    """
+    """Compute per-field confidence: OCR confidence × parser certainty × detection IoU."""
     return ocr_confidence * parser_certainty * detection_iou

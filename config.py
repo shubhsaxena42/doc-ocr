@@ -109,10 +109,10 @@ class LatencyConfig:
 class ModelConfig:
     """Model paths and configurations."""
     
-    # OCR Models
-    paddle_ocr_lang: str = "en"
-    paddle_ocr_use_angle_cls: bool = True
-    paddle_ocr_use_gpu: bool = True
+    # OCR Microservice URLs (each runs in its own container)
+    paddle_ocr_url: str = "http://localhost:5001"
+    deepseek_ocr_url: str = "http://localhost:5002"
+    ocr_timeout: int = 120  # HTTP timeout for OCR calls (seconds)
     
     # YOLO Models (ONNX format)
     yolo_signature_model: str = "models/yolo_signature.onnx"

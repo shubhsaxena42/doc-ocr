@@ -763,7 +763,7 @@ class DocumentProcessor:
 def create_processor(
     mode: str = "full",
     golden_set_path: str = None,
-    dealer_list_path: str = None
+    dealer_list_path: str = None,
 ) -> DocumentProcessor:
     """
     Factory function to create a DocumentProcessor.

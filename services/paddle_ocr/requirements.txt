@@ -1,0 +1,10 @@
+# PaddleOCR Service - Isolated dependencies
+# Uses transformers 4.37.x (compatible with PaddlePaddle)
+paddleocr==2.7.3
+paddlepaddle==2.5.2
+transformers==4.37.2
+flask==3.0.3
+gunicorn==22.0.0
+Pillow>=9.0.0
+numpy>=1.21.0
+opencv-python-headless==4.9.0.80
