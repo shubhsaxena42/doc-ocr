@@ -22,7 +22,7 @@
 
 ## ⚡ What Problem Does This Solve?
 
-Indian banks and NBFCs processing tractor loan applications manually re-key data from handwritten/scanned invoices — a process that takes **~8 minutes per document**, costs ~₹50 in manual labour, and runs at **~70% accuracy** due to human error.
+Indian banks and NBFCs processing tractor loan applications manually re-key data from handwritten/scanned invoices — a process that takes **\~8 minutes per document**, costs \~₹50 in manual labour, and runs at **\~70% accuracy** due to human error.
 
 **IDAI automates this end-to-end:**
 
@@ -127,7 +127,7 @@ flowchart LR
 ### Challenge 2 — Cost vs. Accuracy Trade-off
 **Problem:** Running a 70B+ VLM on every document would blow past the $0.01/doc budget.
 
-**Solution:** 3-tier escalation ladder. ~80% of documents are resolved in Tier 1 (instantaneous regex rules, $0). ~10% require the SLM (~$0.001 per call). Only ~5-10% of the hardest cases reach the VLM. Average cost stays well under the budget.
+**Solution:** 3-tier escalation ladder. \~80% of documents are resolved in Tier 1 (instantaneous regex rules, $0). \~10% require the SLM (\~$0.001 per call). Only \~5-10% of the hardest cases reach the VLM. Average cost stays well under the budget.
 
 ### Challenge 3 — Visual Field Verification
 **Problem:** OCR engines produce text only — they cannot confirm if a signature or stamp is **physically present** on the document.
@@ -141,7 +141,7 @@ flowchart LR
 ### Prerequisites
 - Docker + Docker Compose v2
 - NVIDIA GPU + `nvidia-container-toolkit` (for DeepSeek-OCR and VLM)
-- ~20 GB free disk (model weights downloaded on first run)
+- \~20 GB free disk (model weights downloaded on first run)
 
 ### One-Command Start
 
@@ -241,12 +241,12 @@ Outputs: DLA, per-field accuracy, mAP (IoU>0.5), cost breakdown, VLM invocation 
 
 | Component | Cost | Latency | Invocation Rate |
 |:---|:---:|:---:|:---:|
-| PaddleOCR Service (local) | $0 | ~2.5s | 100% |
-| DeepSeek-OCR Service (local, 4-bit) | $0 | ~2.5s | 100% |
-| YOLOv8 Detection (ONNX, local) | $0 | ~3s | 100% |
-| Tier 1 — Rules | $0 | <1ms | ~80% of conflicts |
-| Tier 2 — SLM (Qwen 3B, 4-bit) | ~$0.001/call | ~5s | ~15% of conflicts |
-| Tier 3 — VLM (Qwen-VL 7B, 4-bit) | ~$0.02/call | ~15s | ~5% of conflicts |
+| PaddleOCR Service (local) | $0 | \~2.5s | 100% |
+| DeepSeek-OCR Service (local, 4-bit) | $0 | \~2.5s | 100% |
+| YOLOv8 Detection (ONNX, local) | $0 | \~3s | 100% |
+| Tier 1 — Rules | $0 | <1ms | \~80% of conflicts |
+| Tier 2 — SLM (Qwen 3B, 4-bit) | \~$0.001/call | \~5s | \~15% of conflicts |
+| Tier 3 — VLM (Qwen-VL 7B, 4-bit) | \~$0.02/call | \~15s | \~5% of conflicts |
 | **Average Total** | **<$0.01** | **<30s** | — |
 
 ---
