@@ -2,7 +2,7 @@
 
 # 🚜 IDAI — Intelligent Document AI Pipeline
 
-### Automated tractor loan invoice extraction at **≥95% accuracy**, **<$0.01/doc**, **<30s latency**
+### Automated tractor loan invoice extraction at **≥85% accuracy**, **<$0.01/doc**, **<30s latency**
 
 *A production-grade MLOps pipeline that runs ensemble OCR, YOLOv8 visual detection, and a 3-tier LLM adjudication ladder — deployed as isolated Docker microservices to eliminate dependency conflicts entirely.*
 
@@ -26,7 +26,7 @@ Indian banks and NBFCs processing tractor loan applications manually re-key data
 
 **IDAI automates this end-to-end:**
 
-> Feed in a scanned invoice → get back a structured JSON with dealer name, model, HP, cost, and confirmed signature/stamp — in under 30 seconds, at sub-cent cost, with ≥95% accuracy.
+> Feed in a scanned invoice → get back a structured JSON with dealer name, model, HP, cost, and confirmed signature/stamp — in under 30 seconds, at sub-cent cost, with ≥85% accuracy.
 
 ---
 
@@ -34,7 +34,7 @@ Indian banks and NBFCs processing tractor loan applications manually re-key data
 
 | Metric | Target | Notes |
 |:---|:---:|:---|
-| **Document-Level Accuracy (DLA)** | **≥ 95%** | All 6 fields correct per document |
+| **Document-Level Accuracy (DLA)** | **≥ 85%** | All 6 fields correct per document |
 | **Cost per Document** | **< $0.01** | Local models; VLM invoked <10% of the time |
 | **End-to-End Latency** | **< 30s** | OCR runs in parallel; tiers short-circuit on agreement |
 | **VLM Invocation Rate** | **< 10%** | Most conflicts resolved by cheap Rules/SLM tiers |
